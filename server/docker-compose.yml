@@ -28,7 +28,7 @@ services:
     build:
       context: ./detector
       dockerfile: Dockerfile
-    image: ${DETECTOR_IMAGE:-ghcr.io/aureliRoura/camsec-detector:latest}
+    image: ${DETECTOR_IMAGE:-ghcr.io/aureliroura/camsec-detector:latest}
     container_name: camsec-detector
     restart: unless-stopped
     environment:
@@ -63,7 +63,7 @@ services:
     build:
       context: ./viewer
       dockerfile: Dockerfile
-    image: ${VIEWER_IMAGE:-ghcr.io/aureliRoura/camsec-viewer:latest}
+    image: ${VIEWER_IMAGE:-ghcr.io/aureliroura/camsec-viewer:latest}
     container_name: camsec-viewer
     restart: unless-stopped
     environment:
