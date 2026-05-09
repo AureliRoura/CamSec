@@ -1,0 +1,85 @@
+# CamSec – Docker Compose stack
+#
+# Services:
+#   detector  – YOLOv8 person detector + MQTT alert publisher
+#   viewer    – HTTP dashboard (real-time alert viewer)
+#
+# Both services connect to an external MQTT broker via the host network stack.
+# Set MQTT_BROKER to the IP / hostname of the broker in the .env file.
+#
+# Quick start:
+#   cp .env.example .env   # edit MQTT_BROKER and credentials
+#   docker compose up --build -d
+#
+# Dashboard: http://localhost:8080
+# Embed panel (iframe): http://localhost:8080/embed
+#
+# Logs:
+#   docker compose logs -f detector
+#   docker compose logs -f viewer
+#
+# Stop:
+#   docker compose down
+
+services:
+
+  # ── Person Detector ──────────────────────────────────────────────────────────
+  detector:
+    build:
+      context: ./detector
+      dockerfile: Dockerfile
+    image: camsec-detector:latest
+    container_name: camsec-detector
+    restart: unless-stopped
+    environment:
+      # ── MQTT broker (external) ──────────────────────────────────────────────
+      # Set MQTT_BROKER to the IP or hostname of the existing broker.
+      # If the broker runs in another Docker network use its container name
+      # and add that network under 'networks:' below.
+      MQTT_BROKER:  ${MQTT_BROKER:-localhost}
+      MQTT_PORT:    ${MQTT_PORT:-1883}
+      MQTT_USER:    ${DETECTOR_MQTT_USER:-}
+      MQTT_PASS:    ${DETECTOR_MQTT_PASS:-}
+      MQTT_CLIENT:  camsec-detector
+
+      # ── Detection ────────────────────────────────────────────────────────────
+      YOLO_MODEL:   yolov8n.pt  # nano (fastest); alternatives: yolov8s.pt, yolov8m.pt
+      CONFIDENCE:   "0.45"      # Minimum detection confidence (0.0–1.0)
+      CHUNK_SIZE:   "4096"      # Must match the ESP32-CAM CHUNK_SIZE
+
+      # ── Operational ──────────────────────────────────────────────────────────
+      STALE_TTL_S:  "60"        # Discard incomplete image buffers after N seconds
+      LOG_LEVEL:    INFO        # DEBUG | INFO | WARNING | ERROR
+    volumes:
+      # Cache the YOLOv8 weights across container restarts
+      - yolo-cache:/root/.config/Ultralytics
+    # Uses the host network stack – the container sees the same interfaces and
+    # routes as the host machine, so it reaches the MQTT broker at MQTT_BROKER
+    # exactly as any other process on this server would.
+    network_mode: host
+
+  # ── Alert Viewer ─────────────────────────────────────────────────────────────
+  viewer:
+    build:
+      context: ./viewer
+      dockerfile: Dockerfile
+    image: camsec-viewer:latest
+    container_name: camsec-viewer
+    restart: unless-stopped
+    environment:
+      MQTT_BROKER:  ${MQTT_BROKER:-localhost}
+      MQTT_PORT:    ${MQTT_PORT:-1883}
+      MQTT_USER:    ${VIEWER_MQTT_USER:-}
+      MQTT_PASS:    ${VIEWER_MQTT_PASS:-}
+      MQTT_CLIENT:  camsec-viewer
+      CHUNK_SIZE:   "4096"
+      MAX_ALERTS:   "50"       # max images kept in memory
+      HTTP_HOST:    "0.0.0.0"
+      HTTP_PORT:    "8088"
+      LOG_LEVEL:    INFO
+    ports:
+      - "8088:8088"            # expose to Windows host
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  yolo-cache:

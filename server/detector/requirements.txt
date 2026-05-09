@@ -1,0 +1,13 @@
+# Runtime dependencies for CamSec detector
+
+# MQTT client (pinned to v1.x – v2.x has breaking API changes)
+paho-mqtt>=1.6.1,<2.0
+
+# YOLO person detection (YOLOv8 nano model downloaded at build time)
+ultralytics>=8.2,<9.0
+
+# OpenCV headless (no GUI dependencies needed inside Docker)
+opencv-python-headless>=4.9,<5.0
+
+# Numerical computing (transitive dep, explicit pin for reproducibility)
+numpy>=1.26,<2.0

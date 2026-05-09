@@ -1,0 +1,35 @@
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+server/mosquitto/config/passwd
+
+# ── PlatformIO ────────────────────────────────────────────────────────────────
+camara/.pio/
+camara/compile_commands.json
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.Python
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+server/mosquitto/config/passwd
+
+# ── YOLO model cache (large binary, downloaded at build time) ─────────────────
+*.pt
+*.onnx
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/c_cpp_properties.json
+!.vscode/extensions.json
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
