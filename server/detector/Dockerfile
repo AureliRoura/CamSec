@@ -1,16 +1,24 @@
 # ─── CamSec Detector – Docker image ──────────────────────────────────────────
 # Base: Python 3.11 slim (Debian Bookworm)
+# Supports: amd64, arm64/v8, arm/v7
 FROM python:3.11-slim
 
 # System dependencies required by OpenCV
-RUN apt-get update \
+# Install build tools first to resolve dependencies properly on ARM
+RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
-        libgl1 \
-        libglib2.0-0 \
-        libsm6 \
-        libxext6 \
-        libxrender1 \
- && rm -rf /var/lib/apt/lists/*
+        build-essential \
+        libatlas-base-dev \
+        libjasper-dev \
+        libtiff5 \
+        libjasper1 \
+        libharfbuzz0b \
+        libwebp6 \
+        libtiff5 \
+        libopenjp2-7 \
+        libjasper1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && apt-get clean
 
 WORKDIR /app
 
