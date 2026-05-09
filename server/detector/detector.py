@@ -21,6 +21,7 @@ Global status:
 """
 
 import os
+import gc
 import io
 import json
 import struct
@@ -217,6 +218,10 @@ def _process_image(prefix: str, buf: ImageBuffer):
 
     if detections:
         _publish_alert(buf, img, detections)
+
+    # Free memory explicitly (important on low-RAM devices like Raspberry Pi)
+    del img, detections, jpeg
+    gc.collect()
 
 
 # ─── MQTT callbacks ───────────────────────────────────────────────────────────
