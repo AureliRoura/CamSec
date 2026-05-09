@@ -47,6 +47,7 @@ services:
       # ── Operational ──────────────────────────────────────────────────────────
       STALE_TTL_S:  "60"        # Discard incomplete image buffers after N seconds
       LOG_LEVEL:    INFO        # DEBUG | INFO | WARNING | ERROR
+      YOLO_IMGSZ:   "640"       # Resize input to this before inference (saves RAM on Pi)
     volumes:
       # Cache the YOLOv8 weights across container restarts
       - yolo-cache:/root/.config/Ultralytics

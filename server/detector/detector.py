@@ -43,6 +43,7 @@ MQTT_PASS    = os.getenv("MQTT_PASS",    "")
 MQTT_CLIENT  = os.getenv("MQTT_CLIENT",  "camsec-detector")
 YOLO_MODEL   = os.getenv("YOLO_MODEL",   "yolov8n.pt")
 CONFIDENCE   = float(os.getenv("CONFIDENCE",   "0.45"))
+YOLO_IMGSZ   = int(os.getenv("YOLO_IMGSZ",   "640"))
 CHUNK_SIZE   = int(os.getenv("CHUNK_SIZE",   "4096"))
 STALE_TTL_S  = float(os.getenv("STALE_TTL_S",  "60.0"))
 LOG_LEVEL    = os.getenv("LOG_LEVEL",    "INFO")
@@ -99,7 +100,7 @@ def _detect_persons(jpeg_bytes: bytes) -> Tuple[Optional[np.ndarray], List[dict]
     if img is None:
         return None, []
 
-    results   = _model(img, conf=CONFIDENCE, classes=[0], verbose=False)
+    results   = _model(img, conf=CONFIDENCE, classes=[0], verbose=False, imgsz=YOLO_IMGSZ)
     detections: List[dict] = []
 
     for r in results:
