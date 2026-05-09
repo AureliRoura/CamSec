@@ -1,0 +1,24 @@
+{
+    "folders": [
+        {
+            "path": "camara",
+            "name": "🎥 Firmware (ESP32-CAM)"
+        },
+        {
+            "path": "server",
+            "name": "🐳 Server (Docker)"
+        }
+    ],
+    "settings": {
+        "platformio.projectEnvName": "esp32cam",
+        "python.linting.enabled": false,
+        "python.formatting.provider": "none"
+    },
+    "extensions": {
+        "recommendations": [
+            "platformio.platformio-ide",
+            "ms-python.python",
+            "ms-vscode.cpptools"
+        ]
+    }
+}
