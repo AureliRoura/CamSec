@@ -409,6 +409,9 @@ void setup() {
 
     connectMqtt();
 
+    // Red LED ON steady = system operational
+    digitalWrite(RED_LED_PIN, LOW);
+
     // First capture triggers immediately (no initial delay)
     lastCapture = millis() - CAPTURE_INTERVAL_MS;
 
@@ -427,8 +430,10 @@ void loop() {
 
     // Reconnect MQTT if dropped
     if (!mqtt.connected()) {
+        digitalWrite(RED_LED_PIN, HIGH);  // OFF while reconnecting
         Serial.println("[MQTT] Connection lost – reconnecting…");
         connectMqtt();
+        digitalWrite(RED_LED_PIN, LOW);   // Back ON once reconnected
     }
 
     mqtt.loop();
