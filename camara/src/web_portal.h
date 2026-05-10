@@ -101,6 +101,14 @@ function togglePw(btn){
     <input type="text" name="mqtt_prefix" maxlength="63" value="{PREFIX}" required>
     <p class="hint">Exemple: <code>cam/01</code> &rarr; topics: <code>cam/01/status</code>, <code>cam/01/image/data</code>, etc.</p>
 
+    <h2>&#128247; C&agrave;mera</h2>
+    <label>Orientaci&oacute; de la c&agrave;mera</label>
+    <select name="cam_flip" style="width:100%;padding:.5em .7em;border:1px solid #bbb;border-radius:5px;font-size:.95em">
+      <option value="0" {SEL_NORMAL}>Normal (cap amunt)</option>
+      <option value="1" {SEL_FLIP}>Cap per avall (rotar 180&deg;)</option>
+    </select>
+    <p class="hint">Selecciona &laquo;Cap per avall&raquo; si la c&agrave;mera est&agrave; muntada al rev&eacute;s.</p>
+
     <button type="submit">&#128190; Desar i reiniciar</button>
   </form>
 </div>
@@ -145,12 +153,14 @@ static void (*_pSaveFn)()    = nullptr;
 // Build the config page substituting current values (passwords never pre-filled)
 static String _buildPage(const AppConfig& cfg) {
     String html = FPSTR(PORTAL_HTML);
-    html.replace("{SSID}",   String(cfg.wifi_ssid));
-    html.replace("{BROKER}", String(cfg.mqtt_broker));
-    html.replace("{PORT}",   String(cfg.mqtt_port));
-    html.replace("{MUSER}",  String(cfg.mqtt_user));
-    html.replace("{CLIENT}", String(cfg.mqtt_client));
-    html.replace("{PREFIX}", String(cfg.mqtt_prefix));
+    html.replace("{SSID}",       String(cfg.wifi_ssid));
+    html.replace("{BROKER}",     String(cfg.mqtt_broker));
+    html.replace("{PORT}",       String(cfg.mqtt_port));
+    html.replace("{MUSER}",      String(cfg.mqtt_user));
+    html.replace("{CLIENT}",     String(cfg.mqtt_client));
+    html.replace("{PREFIX}",     String(cfg.mqtt_prefix));
+    html.replace("{SEL_NORMAL}", cfg.cam_flip == 0 ? "selected" : "");
+    html.replace("{SEL_FLIP}",   cfg.cam_flip == 1 ? "selected" : "");
     return html;
 }
 
@@ -188,6 +198,9 @@ static void _handleSave() {
 
     if (_portalServer.hasArg("mqtt_prefix") && _portalServer.arg("mqtt_prefix").length() > 0)
         strlcpy(cfg.mqtt_prefix, _portalServer.arg("mqtt_prefix").c_str(), sizeof(cfg.mqtt_prefix));
+
+    if (_portalServer.hasArg("cam_flip"))
+        cfg.cam_flip = (_portalServer.arg("cam_flip") == "1") ? 1 : 0;
 
     // Persist to NVS
     _pSaveFn();

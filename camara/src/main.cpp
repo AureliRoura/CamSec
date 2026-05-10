@@ -87,6 +87,7 @@ void loadConfig() {
     strlcpy(cfg.mqtt_pass,   prefs.getString("mqtt_pass",   "").c_str(),         sizeof(cfg.mqtt_pass));
     strlcpy(cfg.mqtt_client, prefs.getString("mqtt_client", "esp32cam").c_str(), sizeof(cfg.mqtt_client));
     strlcpy(cfg.mqtt_prefix, prefs.getString("mqtt_prefix", "cam/01").c_str(),   sizeof(cfg.mqtt_prefix));
+    cfg.cam_flip =           prefs.getUChar("cam_flip",    0);
     prefs.end();
 }
 
@@ -100,6 +101,7 @@ void saveConfig() {
     prefs.putString("mqtt_pass",   cfg.mqtt_pass);
     prefs.putString("mqtt_client", cfg.mqtt_client);
     prefs.putString("mqtt_prefix", cfg.mqtt_prefix);
+    prefs.putUChar("cam_flip",    cfg.cam_flip);
     prefs.end();
     Serial.println("[Config] Saved to NVS");
 }
@@ -413,6 +415,16 @@ void setup() {
         Serial.println("[Boot] Camera init failed – rebooting in 3 s");
         delay(3000);
         ESP.restart();
+    }
+
+    // Apply 180° rotation if camera is mounted upside-down
+    if (cfg.cam_flip) {
+        sensor_t* s = esp_camera_sensor_get();
+        if (s) {
+            s->set_vflip(s, 1);
+            s->set_hmirror(s, 1);
+            Serial.println("[Camera] Rotation 180° applied (cap per avall)");
+        }
     }
 
     connectWifi();
