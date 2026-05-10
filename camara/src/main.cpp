@@ -181,6 +181,21 @@ static void setFlash(bool on) {
     digitalWrite(FLASH_LED_PIN, on ? HIGH : LOW);
 }
 
+// ─── LED blink pattern ────────────────────────────────────────────────────────
+// Capturing : 2 blinks every 3 s  (ON·80 ms OFF·200 ms ON·80 ms OFF·2640 ms)
+// Idle      : 1 blink  every 3 s  (ON·80 ms OFF·2920 ms)
+// Called each loop() iteration; LED stays OFF during MQTT reconnect.
+static void updateLed() {
+    unsigned long t = millis() % 3000UL;
+    bool on;
+    if (capturing) {
+        on = (t < 80) || (t >= 280 && t < 360);
+    } else {
+        on = (t < 80);
+    }
+    digitalWrite(RED_LED_PIN, on ? LOW : HIGH);  // active LOW
+}
+
 // ─── Wi-Fi ────────────────────────────────────────────────────────────────────
 static void connectWifi() {
     Serial.printf("[WiFi] Connecting to \"%s\"", cfg.wifi_ssid);
@@ -409,9 +424,6 @@ void setup() {
 
     connectMqtt();
 
-    // Red LED ON steady = system operational
-    digitalWrite(RED_LED_PIN, LOW);
-
     // First capture triggers immediately (no initial delay)
     lastCapture = millis() - CAPTURE_INTERVAL_MS;
 
@@ -433,10 +445,10 @@ void loop() {
         digitalWrite(RED_LED_PIN, HIGH);  // OFF while reconnecting
         Serial.println("[MQTT] Connection lost – reconnecting…");
         connectMqtt();
-        digitalWrite(RED_LED_PIN, LOW);   // Back ON once reconnected
     }
 
     mqtt.loop();
+    updateLed();
 
     // Timed image capture
     if (capturing && (millis() - lastCapture >= CAPTURE_INTERVAL_MS)) {
