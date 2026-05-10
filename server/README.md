@@ -84,17 +84,21 @@ automàticament al contenidor.
 |---|---|---|
 | `MQTT_BROKER` | `localhost` | IP o hostname del broker |
 | `MQTT_PORT` | `1883` | Port TCP del broker |
-| `DETECTOR_MQTT_USER` | *(buit)* | Usuari MQTT (opcional) |
-| `DETECTOR_MQTT_PASS` | *(buit)* | Contrasenya MQTT (opcional) |
+| `DETECTOR_MQTT_USER` | *(buit)* | Usuari MQTT del detector (opcional) |
+| `DETECTOR_MQTT_PASS` | *(buit)* | Contrasenya MQTT del detector (opcional) |
+| `VIEWER_MQTT_USER` | *(buit)* | Usuari MQTT del viewer (opcional) |
+| `VIEWER_MQTT_PASS` | *(buit)* | Contrasenya MQTT del viewer (opcional) |
 | `YOLO_MODEL` | `/models/yolov8n.pt` | Model YOLO: `n`=nano · `s`=small · `m`=medium |
 | `YOLO_IMGSZ` | `320` | Mida d'entrada al model (px); valors més petits → menys RAM |
 | `CONFIDENCE` | `0.45` | Llindar de confiança de detecció (0.0–1.0) |
 | `CHUNK_SIZE` | `4096` | Mida del chunk en bytes (ha de coincidir amb la càmera) |
 | `STALE_TTL_S` | `60` | Descarta buffers d'imatge incomplets passats N segons |
 | `LOG_LEVEL` | `INFO` | Nivell de log: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
+| `MAX_ALERTS` | `50` | Màxim d'alertes en memòria RAM al viewer |
 | `PERSIST_DIR` | `/data/alerts` | Ruta dins del contenidor on es desen les imatges |
 | `MAX_DISK_ALERTS` | `500` | Número màxim d'imatges a conservar al disc |
 | `MAX_DISK_DAYS` | `7` | Dies màxim de retenció d'imatges |
+| `ALERTS_DIR` | `/home/pi/camsec-alerts` | Carpeta del **host** on es munten les alertes (bind mount) |
 
 Per canviar qualsevol paràmetre edita `.env` i reinicia:
 
@@ -158,6 +162,33 @@ I reinicia el viewer:
 ```bash
 docker compose restart viewer
 ```
+
+---
+
+## Dashboard i API HTTP
+
+Accedeix a **http://\<ip-servidor\>:8088**
+
+- **Vista principal** — una targeta per càmera amb la darrera foto detectada.
+- **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (llegeix del disc, no només de la RAM).
+- **Eliminar fotos** — botó 🗑️ a cada foto de l'historial per eliminar-la individualment; botó **Elimina totes** a la capçalera del modal per buidar tota la càmera.
+- **Temps real** — s'actualitza automàticament via Server-Sent Events (SSE) sense cal recarregar la pàgina.
+- **Embed** — panel mínim per incloure via `<iframe src="http://servidor:8088/embed">`.
+
+### Endpoints REST
+
+| Mètode | Endpoint | Descripció |
+|---|---|---|
+| `GET` | `/api/alerts` | Llista d'alertes recents en memòria (JSON) |
+| `GET` | `/api/alerts/latest` | Darrera alerta per càmera (JSON) |
+| `GET` | `/api/alerts/camera/<prefix>` | Historial complet d'una càmera (des de disc) |
+| `DELETE` | `/api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera (RAM + disc) |
+| `GET` | `/api/image/<id>` | Serveix el JPEG d'una alerta concreta |
+| `DELETE` | `/api/image/<id>` | Elimina una foto concreta (RAM + disc) |
+| `GET` | `/stream` | Server-Sent Events en temps real |
+| `GET` | `/embed` | Panel mínim per `<iframe>` |
+
+---
 
 ### Consumits (per càmera)
 

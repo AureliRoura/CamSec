@@ -462,6 +462,14 @@ header h1{font-size:1.1em;font-weight:600;color:#58a6ff}
 .hist-card{background:#0d1117;border:1px solid #21262d;border-radius:6px;overflow:hidden}
 .hist-card img{width:100%;display:block;object-fit:cover;max-height:170px;cursor:zoom-in}
 .hist-card .info{padding:.4em .6em;font-size:.75em;color:#8b949e;line-height:1.5}
+.hist-card .del-one{display:block;width:100%;padding:.3em;background:none;
+  border:none;border-top:1px solid #21262d;color:#6e7681;font-size:.75em;
+  cursor:pointer;text-align:center}
+.hist-card .del-one:hover{background:#f851491a;color:#f85149}
+.hist-card.removing{opacity:.3;pointer-events:none;transition:opacity .3s}
+#del-camera{background:none;border:1px solid #f85149;color:#f85149;
+  border-radius:5px;padding:.3em .8em;font-size:.8em;cursor:pointer}
+#del-camera:hover{background:#f85149;color:#fff}
 #modal-empty{padding:2em;text-align:center;color:#484f58}
 </style>
 """
@@ -497,6 +505,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="modal-box">
     <div id="modal-header">
       <span id="modal-title">Historial</span>
+      <button id="del-camera" onclick="deleteCameraAlerts()" title="Elimina totes les fotos d'aquesta c\u00e0mera">&#128465; Elimina totes</button>
       <button id="modal-close" onclick="closeModal()">&#x2715;</button>
     </div>
     <div id="modal-grid"></div>
@@ -562,13 +571,18 @@ es.onopen    = () => { dot.style.background='#3fb950'; };
 const modal      = document.getElementById('modal');
 const modalGrid  = document.getElementById('modal-grid');
 const modalTitle = document.getElementById('modal-title');
+let   _curCamera = null;
 
 function openHistory(camera) {
-  modalTitle.textContent = '&#128247; ' + camera + ' – Historial';
-  modalGrid.innerHTML    = '<p id="modal-empty">Carregant…</p>';
+  _curCamera = camera;
+  modalTitle.textContent = '\u{1F4F7} ' + camera + ' \u2013 Historial';
+  loadHistory(camera);
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
+}
 
+function loadHistory(camera) {
+  modalGrid.innerHTML = '<p id="modal-empty">Carregant\u2026</p>';
   fetch('/api/alerts/camera/' + encodeURIComponent(camera))
     .then(r => r.json())
     .then(data => {
@@ -580,17 +594,54 @@ function openHistory(camera) {
       data.forEach(a => {
         const c = document.createElement('div');
         c.className = 'hist-card';
+        c.dataset.imgId = a.img_id;
         c.innerHTML =
-          '<a href="'+ a.url +'" target="_blank">' +
-            '<img src="'+ a.url +'" loading="lazy">' +
-          '</a>' +
-          '<div class="info">' +
-            buildTags(a) + '<br>' +
-            fmtTs(a.ts_iso) +
-          '</div>';
+          '<a href="'+ a.url +'" target="_blank">'+
+            '<img src="'+ a.url +'" loading="lazy">'+
+          '</a>'+
+          '<div class="info">'+ buildTags(a) +'<br>'+ fmtTs(a.ts_iso) +'</div>'+
+          '<button class="del-one" onclick="deleteOne('+ a.img_id +', this)">'+
+            '\u{1F5D1} Elimina aquesta foto</button>';
         modalGrid.appendChild(c);
       });
     });
+}
+
+function deleteOne(imgId, btn) {
+  if (!confirm('Eliminar aquesta foto?')) return;
+  const card = btn.closest('.hist-card');
+  card.classList.add('removing');
+  fetch('/api/image/' + imgId, {method: 'DELETE'})
+    .then(r => {
+      if (r.ok) {
+        card.remove();
+        if (!modalGrid.children.length)
+          modalGrid.innerHTML = '<p id="modal-empty">Sense historial disponible.</p>';
+      } else {
+        card.classList.remove('removing');
+        alert('Error eliminant la foto.');
+      }
+    })
+    .catch(() => { card.classList.remove('removing'); alert('Error de xarxa.'); });
+}
+
+function deleteCameraAlerts() {
+  if (!_curCamera) return;
+  if (!confirm('Eliminar TOTES les fotos de ' + _curCamera + '?')) return;
+  fetch('/api/alerts/camera/' + encodeURIComponent(_curCamera), {method: 'DELETE'})
+    .then(r => {
+      if (r.ok) {
+        modalGrid.innerHTML = '<p id="modal-empty">Sense historial disponible.</p>';
+        const card = document.getElementById('cam-' + _curCamera);
+        if (card) card.remove();
+        delete cameras[_curCamera];
+        const n = Object.keys(cameras).length;
+        counter.textContent = n + ' c\u00e0mera' + (n===1?'':'es');
+      } else {
+        alert('Error eliminant les fotos.');
+      }
+    })
+    .catch(() => alert('Error de xarxa.'));
 }
 
 function closeModal() {
@@ -691,35 +742,57 @@ def stream():
     )
 
 
-@app.route("/api/alerts/camera/<path:camera>")
-def api_camera_alerts(camera: str):
-    """Return all alerts for a specific camera from disk (newest first)."""
-    entries = _read_index()
-    items = [_entry_to_dict(e) for e in entries if e.get("camera") == camera]
-    return jsonify(items)
-
-
-@app.route("/api/alerts")
-def api_alerts():
-    """Return list of recent alerts (newest first). ?limit=N to restrict."""
-    from flask import request
-    limit = min(int(request.args.get("limit", MAX_ALERTS)), MAX_ALERTS)
-    with _lock:
-        items = [a.to_dict() for a in reversed(list(_alerts))][:limit]
-    return jsonify(items)
-
-
-@app.route("/api/alerts/latest")
-def api_latest():
-    """Return the most recent alert per camera."""
-    with _lock:
-        items = [a.to_dict() for a in _by_camera.values()]
-    return jsonify(items)
-
-
-@app.route("/api/image/<int:img_id>")
+@app.route("/api/image/<int:img_id>", methods=["GET", "DELETE"])
 def api_image(img_id: int):
-    """Serve the annotated JPEG for a given alert image id."""
+    """GET: serve the annotated JPEG. DELETE: remove it from RAM and disk."""
+    from flask import request as freq
+    if freq.method == "DELETE":
+        # Remove from in-memory stores
+        with _lock:
+            alert = _by_id.pop(img_id, None)
+            if alert:
+                try:
+                    _alerts.remove(alert)
+                except ValueError:
+                    pass
+                # Update _by_camera if this was the latest for its camera
+                cam = alert.camera
+                if _by_camera.get(cam) is alert:
+                    remaining = [a for a in reversed(list(_alerts)) if a.camera == cam]
+                    if remaining:
+                        _by_camera[cam] = remaining[0]
+                    else:
+                        _by_camera.pop(cam, None)
+        # Remove from disk
+        path = _img_path(img_id)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        # Rewrite index without this entry
+        try:
+            entries = []
+            if os.path.exists(_INDEX_FILE):
+                with open(_INDEX_FILE, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                e = json.loads(line)
+                                if e.get("img_id") != img_id:
+                                    entries.append(e)
+                            except json.JSONDecodeError:
+                                pass
+            with open(_INDEX_FILE, "w") as f:
+                for e in entries:
+                    f.write(json.dumps(e) + "\n")
+        except OSError as exc:
+            log.warning("Could not update index after delete: %s", exc)
+        log.info("Deleted alert image #%d", img_id)
+        return "", 204
+
+    # GET
     with _lock:
         alert = _by_id.get(img_id)
     if alert is not None and alert.jpeg:
@@ -728,12 +801,53 @@ def api_image(img_id: int):
             mimetype="image/jpeg",
             download_name=f"alert_{img_id}.jpg",
         )
-    # Fallback: serve from disk (covers loaded-from-disk and old alerts evicted from RAM)
     path = _img_path(img_id)
     if os.path.exists(path):
         return send_file(path, mimetype="image/jpeg",
                          download_name=f"alert_{img_id}.jpg")
     abort(404)
+
+
+@app.route("/api/alerts/camera/<path:camera>", methods=["GET", "DELETE"])
+def api_camera_alerts(camera: str):
+    """GET: all alerts for camera from disk. DELETE: remove all."""
+    from flask import request as freq
+    if freq.method == "DELETE":
+        entries = _read_index()
+        to_remove = [e for e in entries if e.get("camera") == camera]
+        keep      = [e for e in entries if e.get("camera") != camera]
+        # Remove files
+        for e in to_remove:
+            p = e.get("path", "")
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        # Rewrite index
+        try:
+            with open(_INDEX_FILE, "w") as f:
+                for e in keep:
+                    f.write(json.dumps(e) + "\n")
+        except OSError as exc:
+            log.warning("Could not rewrite index after camera delete: %s", exc)
+        # Remove from in-memory stores
+        ids_to_remove = {e["img_id"] for e in to_remove}
+        with _lock:
+            for img_id in ids_to_remove:
+                _by_id.pop(img_id, None)
+            new_alerts = deque((a for a in _alerts if a.camera != camera),
+                               maxlen=MAX_ALERTS)
+            _alerts.clear()
+            _alerts.extend(new_alerts)
+            _by_camera.pop(camera, None)
+        log.info("Deleted all %d alert(s) for camera '%s'", len(to_remove), camera)
+        return "", 204
+
+    # GET
+    entries = _read_index()
+    items = [_entry_to_dict(e) for e in entries if e.get("camera") == camera]
+    return jsonify(items)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

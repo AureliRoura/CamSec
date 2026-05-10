@@ -206,7 +206,7 @@ La primera vegada (o si canvies la xarxa), cal configurar la càmera via el port
 1. **Alimenta la càmera.** Durant els **primers 5 segons** el LED vermell farà blink ràpid.
 2. **Prem el botó BOOT (GPIO0)** mentre el LED fa blink → la càmera entra en mode configuració.
 3. El LED vermell fa blink lent (50 ms ON / 2 s OFF) mentre el portal és actiu.
-4. **Connecta el teu mòbil o ordinador** a la xarxa Wi-Fi **`CamSec-Config`** (sense contrasenya).
+4. **Connecta el teu mòbil o ordinador** a la xarxa Wi-Fi **`CamSec-Config`** (contrasenya: `camsec123`).
 5. Obre el navegador a **http://192.168.4.1** (si no s'obre automàticament).
 6. Omple el formulari:
 
@@ -288,6 +288,7 @@ Accedeix a **http://\<ip-servidor\>:8088**
 
 - **Vista principal:** una targeta per càmera amb la **última foto detectada**.
 - **Historial:** clica qualsevol targeta per veure totes les fotos d'aquella càmera.
+- **Eliminar fotos:** botó 🗑 a cada foto de l'historial; botó "Elimina totes" per buidar tota la càmera.
 - **Temps real:** les targetes s'actualitzen automàticament via Server-Sent Events (SSE).
 
 ### API HTTP (per integració externa)
@@ -297,7 +298,9 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `GET /api/alerts` | Llista de totes les alertes recents (JSON) |
 | `GET /api/alerts/latest` | Última alerta per càmera (JSON) |
 | `GET /api/alerts/camera/<prefix>` | Historial d'una càmera concreta |
+| `DELETE /api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera |
 | `GET /api/image/<id>` | Imatge JPEG d'una alerta |
+| `DELETE /api/image/<id>` | Elimina una foto concreta |
 | `GET /stream` | Server-Sent Events en temps real |
 | `GET /embed` | Panel mínim per `<iframe>` |
 
