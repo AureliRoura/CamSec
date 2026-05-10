@@ -575,7 +575,7 @@ let   _curCamera = null;
 
 function openHistory(camera) {
   _curCamera = camera;
-  modalTitle.textContent = '\u{1F4F7} ' + camera + ' \u2013 Historial';
+  modalTitle.textContent = '📷 ' + camera + ' – Historial';
   loadHistory(camera);
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -601,7 +601,7 @@ function loadHistory(camera) {
           '</a>'+
           '<div class="info">'+ buildTags(a) +'<br>'+ fmtTs(a.ts_iso) +'</div>'+
           '<button class="del-one" onclick="deleteOne('+ a.img_id +', this)">'+
-            '\u{1F5D1} Elimina aquesta foto</button>';
+            '🗑️ Elimina aquesta foto</button>';
         modalGrid.appendChild(c);
       });
     });
