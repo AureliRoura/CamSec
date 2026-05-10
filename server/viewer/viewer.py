@@ -861,5 +861,6 @@ if __name__ == "__main__":
     t.start()
 
     log.info("HTTP server listening on %s:%d", HTTP_HOST, HTTP_PORT)
-    # Use threaded=True so SSE clients don't block each other
-    app.run(host=HTTP_HOST, port=HTTP_PORT, threaded=True)
+    from waitress import serve
+    serve(app, host=HTTP_HOST, port=HTTP_PORT, threads=8,
+          channel_timeout=3600)  # long timeout keeps SSE connections alive
