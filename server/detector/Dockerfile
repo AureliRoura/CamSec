@@ -15,7 +15,13 @@ RUN apt-get update -qq \
 
 WORKDIR /app
 
-# Install Python dependencies first (layer cache-friendly)
+# Install CPU-only PyTorch FIRST so ultralytics doesn't pull a CUDA build.
+# The --index-url forces the CPU wheel on every platform (amd64 + arm64).
+RUN pip install --no-cache-dir \
+        torch \
+        --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining Python dependencies (layer cache-friendly)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

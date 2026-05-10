@@ -101,7 +101,7 @@ def _detect_persons(jpeg_bytes: bytes) -> Tuple[Optional[np.ndarray], List[dict]
     if img is None:
         return None, []
 
-    results   = _model(img, conf=CONFIDENCE, classes=[0], verbose=False, imgsz=YOLO_IMGSZ)
+    results   = _model(img, conf=CONFIDENCE, classes=[0], verbose=False, imgsz=YOLO_IMGSZ, device="cpu")
     detections: List[dict] = []
 
     for r in results:
@@ -320,6 +320,7 @@ def main():
 
     log.info("Loading YOLO model: %s", YOLO_MODEL)
     _model = YOLO(YOLO_MODEL)
+    _model.to("cpu")  # Force CPU – no GPU on Raspberry Pi
     log.info("Model ready (confidence threshold: %.0f%%)", CONFIDENCE * 100)
 
     _client = mqtt.Client(

@@ -26,6 +26,7 @@ services:
   # ── Person Detector ──────────────────────────────────────────────────────────
   detector:
     image: ${DETECTOR_IMAGE:-ghcr.io/aureliroura/camsec-detector:latest}
+    platform: linux/arm64/v8
     container_name: camsec-detector
     restart: unless-stopped
     environment:
@@ -56,10 +57,13 @@ services:
     # routes as the host machine, so it reaches the MQTT broker at MQTT_BROKER
     # exactly as any other process on this server would.
     network_mode: host
+    mem_limit: "900m"
+    memswap_limit: "2g"
 
   # ── Alert Viewer ─────────────────────────────────────────────────────────────
   viewer:
     image: ${VIEWER_IMAGE:-ghcr.io/aureliroura/camsec-viewer:latest}
+    platform: linux/arm64/v8
     container_name: camsec-viewer
     restart: unless-stopped
     environment:
