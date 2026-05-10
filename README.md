@@ -219,6 +219,7 @@ La primera vegada (o si canvies la xarxa), cal configurar la càmera via el port
    | MQTT User / Pass | Buit si el broker no requereix autenticació |
    | MQTT Client ID | Identificador únic per a aquesta càmera (p. ex. `cam-sala`) |
    | MQTT Prefix | Prefix dels topics (p. ex. `cam/01`) |
+   | Orientació de la càmera | **Normal** (cap amunt) o **Cap per avall** (rotació 180°) |
 
 7. Clica **Guardar i reiniciar**. La càmera es connectarà a la xarxa i començarà a capturar.
 
@@ -274,7 +275,9 @@ Captura JPEG (5.5 s)
 |---|---|
 | Finestra de configuració (5 s al boot) | Blink ràpid (100 ms ON / 500 ms OFF) |
 | Mode configuració actiu (portal AP) | Blink lent (50 ms ON / 2 s OFF) |
-| Funcionament normal | Apagat |
+| Capturant imatges | 2 parpellejos ràpids cada 3 s |
+| Presa de fotos aturada (`stop`) | 1 parpelleig cada 3 s |
+| Reconnectant MQTT | Apagat |
 | Flash per captura nocturna | LED blanc (GPIO4), temporalment |
 
 ---
@@ -356,3 +359,5 @@ Edita `YOLO_MODEL` a `docker-compose.yml`:
 | `persons: 0` a totes les alertes | Model no carregat correctament | `docker logs camsec-detector` per veure errors YOLO |
 | El portal AP no s'obre | El dispositiu no es connecta a `CamSec-Config` | Connecta manualment i obre http://192.168.4.1 |
 | Imatges incompletes / trencades | Paquets MQTT perduts | Augmenta `STALE_TTL_S` al detector |
+| Imatge al revés | Càmera muntada cap per avall | Activa **Cap per avall** al portal de configuració |
+| Detector peta amb exit code 132 a la Pi | PyTorch CUDA en lloc de CPU | Fes `docker compose pull` per obtenir la imatge arm64 CPU-only |

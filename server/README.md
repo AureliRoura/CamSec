@@ -86,7 +86,8 @@ automàticament al contenidor.
 | `MQTT_PORT` | `1883` | Port TCP del broker |
 | `DETECTOR_MQTT_USER` | *(buit)* | Usuari MQTT (opcional) |
 | `DETECTOR_MQTT_PASS` | *(buit)* | Contrasenya MQTT (opcional) |
-| `YOLO_MODEL` | `yolov8n.pt` | Model YOLO: `n`=nano · `s`=small · `m`=medium |
+| `YOLO_MODEL` | `/models/yolov8n.pt` | Model YOLO: `n`=nano · `s`=small · `m`=medium |
+| `YOLO_IMGSZ` | `320` | Mida d'entrada al model (px); valors més petits → menys RAM |
 | `CONFIDENCE` | `0.45` | Llindar de confiança de detecció (0.0–1.0) |
 | `CHUNK_SIZE` | `4096` | Mida del chunk en bytes (ha de coincidir amb la càmera) |
 | `STALE_TTL_S` | `60` | Descarta buffers d'imatge incomplets passats N segons |
@@ -199,3 +200,18 @@ docker compose down -v
 - Afegeix `.env` al `.gitignore`.
 - Per a entorns exposats a Internet usa MQTT sobre TLS (port 8883) i
   configura `WiFiClientSecure` a l'ESP32 i `tls_*` al broker.
+
+---
+
+## Compatibilitat de plataformes
+
+Les imatges Docker són multi-arquitectura (`linux/amd64` + `linux/arm64/v8`).
+Docker selecciona automàticament l'arquitectura correcta en fer `docker compose pull`.
+
+| Plataforma | Arquitectura | Notes |
+|---|---|---|
+| PC / servidor x86 | `linux/amd64` | Cap configuració addicional |
+| Raspberry Pi 4/5 | `linux/arm64/v8` | PyTorch CPU-only (sense CUDA) |
+
+> La imatge del detector instal·la `torch` i `torchvision` des de l'index CPU de PyTorch
+> (`https://download.pytorch.org/whl/cpu`) per garantir compatibilitat amb ARM sense GPU.

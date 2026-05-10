@@ -13,7 +13,8 @@ Firmware per a una placa **AI-Thinker ESP32-CAM** (OV2640) que captura imatges J
 | Detecció de poca llum | Gain AGC ≥ 25 → activa el LED de flaix |
 | Enviament per MQTT | Imatge dividida en chunks de **4 096 bytes** |
 | Comandes MQTT | `start` · `stop` |
-| Mode configuració | Portal web en punt d'accés (prem BOOT 3 s a l'arrencada) |
+| Orientació de la càmera | Rotació 180° configurable des del portal web |
+| Mode configuració | Portal web en punt d'accés (prem BOOT 5 s a l'arrencada) |
 
 ---
 
@@ -122,6 +123,16 @@ Si ja has compilat i l'error persisteix:
 
 > El LED parpellejarà lentament (1 s) mentre el portal és actiu.
 
+### Orientació de la càmera
+
+Si la càmera està muntada **cap per avall**, activa la rotació 180° des del portal de configuració:
+
+1. Entra al mode configuració (veure punt anterior).
+2. A la secció **Càmera**, selecciona **Cap per avall (rotar 180°)**.
+3. Desa i reinicia.
+
+El firmware aplica `vflip + hmirror` al sensor OV2640 en arrencar — totes les imatges surten ja orientades correctament sense cost per captura.
+
 ---
 
 ## Topics MQTT
@@ -182,6 +193,19 @@ c.loop_forever()
 | `LOW_LIGHT_AGC_TH` | 25 | Llindar AGC per detectar poca llum (0-30) |
 | `FLASH_DELAY_MS` | 80 | Temps d'espera del flaix abans de capturar (ms) |
 | `CONFIG_HOLD_MS` | 3000 | ms que cal mantenir BOOT per entrar en mode config |
+
+---
+
+## LED de la càmera
+
+| Estat | LED vermell (GPIO33) |
+|---|---|
+| Finestra de configuració (5 s al boot) | Blink ràpid (100 ms ON / 500 ms OFF) |
+| Mode configuració actiu (portal AP) | Blink lent (50 ms ON / 2 s OFF) |
+| Capturant imatges | 2 parpellejos ràpids cada 3 s |
+| Presa de fotos aturada (`stop`) | 1 parpelleig cada 3 s |
+| Reconnectant MQTT | Apagat |
+| Flash per captura nocturna | LED blanc (GPIO4), temporalment |
 
 ---
 
