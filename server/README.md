@@ -92,6 +92,9 @@ automàticament al contenidor.
 | `CHUNK_SIZE` | `4096` | Mida del chunk en bytes (ha de coincidir amb la càmera) |
 | `STALE_TTL_S` | `60` | Descarta buffers d'imatge incomplets passats N segons |
 | `LOG_LEVEL` | `INFO` | Nivell de log: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
+| `PERSIST_DIR` | `/data/alerts` | Ruta dins del contenidor on es desen les imatges |
+| `MAX_DISK_ALERTS` | `500` | Número màxim d'imatges a conservar al disc |
+| `MAX_DISK_DAYS` | `7` | Dies màxim de retenció d'imatges |
 
 Per canviar qualsevol paràmetre edita `.env` i reinicia:
 
@@ -101,7 +104,60 @@ docker compose up -d
 
 ---
 
-## Topics MQTT
+## Persistència d'alertes al disc
+
+El viewer desa cada imatge d'alerta en una carpeta del host i recupera l'historial
+complert en reiniciar el contenidor.
+
+### Directori de dades
+
+La variable `ALERTS_DIR` al fitxer `.env` defineix la carpeta del host:
+
+```dotenv
+ALERTS_DIR=/home/pi/camsec-alerts   # per defecte
+```
+
+Pot ser qualsevol ruta accessible, inclús un disc USB muntat:
+
+```dotenv
+ALERTS_DIR=/mnt/usb/camsec-alerts
+```
+
+Crea el directori si no existeix:
+
+```bash
+mkdir -p "$ALERTS_DIR"
+```
+
+### Estructura de fitxers
+
+```
+$ALERTS_DIR/
+├── index.jsonl          # metadades de cada alerta (una línia JSON per entrada)
+└── images/
+    ├── 1.jpg
+    ├── 2.jpg
+    └── …
+```
+
+### Retenció automàtica
+
+Cada 10 alertes el viewer neteja les imatges antigues:
+- Elimina imatges de més de **`MAX_DISK_DAYS`** dies (per defecte 7).
+- Conserva com a màxim **`MAX_DISK_ALERTS`** imatges (per defecte 500).
+
+Per canviar els límits, edita el `.env`:
+
+```dotenv
+MAX_DISK_DAYS=14
+MAX_DISK_ALERTS=1000
+```
+
+I reinicia el viewer:
+
+```bash
+docker compose restart viewer
+```
 
 ### Consumits (per càmera)
 

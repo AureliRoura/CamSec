@@ -75,6 +75,11 @@ services:
       HTTP_HOST:    "0.0.0.0"
       HTTP_PORT:    "8088"
       LOG_LEVEL:    INFO
+      PERSIST_DIR:     /data/alerts   # directory for persisted alert images
+      MAX_DISK_ALERTS: "500"          # max images to keep on disk
+      MAX_DISK_DAYS:   "7"            # max days to keep images
+    volumes:
+      - ${ALERTS_DIR:-/home/pi/camsec-alerts}:/data/alerts
     ports:
       - "8088:8088"            # expose to Windows host
 

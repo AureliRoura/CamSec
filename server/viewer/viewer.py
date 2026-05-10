@@ -40,7 +40,11 @@ CHUNK_SIZE   = int(os.getenv("CHUNK_SIZE",   "4096"))
 MAX_ALERTS   = int(os.getenv("MAX_ALERTS",   "50"))   # alerts kept in memory
 HTTP_HOST    = os.getenv("HTTP_HOST",    "0.0.0.0")
 HTTP_PORT    = int(os.getenv("HTTP_PORT",    "8080"))
-LOG_LEVEL    = os.getenv("LOG_LEVEL",    "INFO")
+LOG_LEVEL        = os.getenv("LOG_LEVEL",        "INFO")
+PERSIST_DIR      = os.getenv("PERSIST_DIR",      "/data/alerts")
+MAX_DISK_ALERTS  = int(os.getenv("MAX_DISK_ALERTS", "500"))
+MAX_DISK_DAYS    = int(os.getenv("MAX_DISK_DAYS",   "7"))
+_INDEX_FILE      = os.path.join(PERSIST_DIR, "index.jsonl")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -59,8 +63,9 @@ class Alert:
     ts:        float
     persons:   int
     dark:      bool
-    jpeg:      bytes        # annotated JPEG
-    b64:       str = ""     # base64 for JSON API (filled lazily)
+    jpeg:      bytes        # annotated JPEG (empty for disk-only alerts)
+    jpeg_path: str  = ""   # path on disk (set after persisting)
+    b64:       str  = ""   # base64 for JSON API (filled lazily)
 
     def to_dict(self, include_image: bool = False) -> dict:
         d = {
@@ -85,6 +90,148 @@ _alerts: deque = deque(maxlen=MAX_ALERTS)            # newest at right
 _by_camera: Dict[str, Alert] = {}                    # latest per camera
 _by_id: Dict[int, Alert]     = {}                    # lookup by img_id
 
+# ─── Disk persistence ────────────────────────────────────────────────────────
+_disk_write_count = 0
+
+
+def _img_path(img_id: int) -> str:
+    return os.path.join(PERSIST_DIR, "images", f"{img_id}.jpg")
+
+
+def _entry_to_dict(e: dict) -> dict:
+    """Convert an index.jsonl entry to the same format as Alert.to_dict()."""
+    return {
+        "img_id":  e["img_id"],
+        "camera":  e["camera"],
+        "ts_iso":  e.get("ts_iso", ""),
+        "ts":      e.get("ts", 0.0),
+        "persons": e.get("persons", 0),
+        "dark":    e.get("dark", False),
+        "url":     f"/api/image/{e['img_id']}",
+    }
+
+
+def _read_index() -> list:
+    """Read all entries from index.jsonl, sorted newest first."""
+    if not os.path.exists(_INDEX_FILE):
+        return []
+    entries = []
+    try:
+        with open(_INDEX_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except OSError:
+        pass
+    entries.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    return entries
+
+
+def _persist_alert(alert: Alert) -> None:
+    """Save JPEG to disk and append metadata to index.jsonl."""
+    if not alert.jpeg:
+        return
+    try:
+        img_dir = os.path.join(PERSIST_DIR, "images")
+        os.makedirs(img_dir, exist_ok=True)
+        path = _img_path(alert.img_id)
+        with open(path, "wb") as f:
+            f.write(alert.jpeg)
+        alert.jpeg_path = path
+        entry = {
+            "img_id":  alert.img_id,
+            "camera":  alert.camera,
+            "ts":      alert.ts,
+            "ts_iso":  alert.ts_iso,
+            "persons": alert.persons,
+            "dark":    alert.dark,
+            "path":    path,
+        }
+        with open(_INDEX_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        log.warning("Could not persist alert #%d: %s", alert.img_id, exc)
+
+
+def _rotate_disk() -> None:
+    """Enforce MAX_DISK_DAYS / MAX_DISK_ALERTS retention (runs every 10 saves)."""
+    global _disk_write_count
+    _disk_write_count += 1
+    if _disk_write_count % 10 != 0:
+        return
+    if not os.path.exists(_INDEX_FILE):
+        return
+    cutoff = time.time() - MAX_DISK_DAYS * 86400
+    entries = []
+    try:
+        with open(_INDEX_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except OSError:
+        return
+    keep   = [e for e in entries if e.get("ts", 0) >= cutoff]
+    remove = [e for e in entries if e.get("ts", 0) < cutoff]
+    keep.sort(key=lambda x: x.get("ts", 0))
+    if len(keep) > MAX_DISK_ALERTS:
+        remove += keep[:-MAX_DISK_ALERTS]
+        keep    = keep[-MAX_DISK_ALERTS:]
+    for e in remove:
+        p = e.get("path", "")
+        if p and os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    if remove:
+        log.info("Rotated %d old alert(s) from disk", len(remove))
+    try:
+        with open(_INDEX_FILE, "w") as f:
+            for e in keep:
+                f.write(json.dumps(e) + "\n")
+    except OSError as exc:
+        log.warning("Could not rewrite index: %s", exc)
+
+
+def _load_persisted() -> None:
+    """Populate in-memory alert store from disk on startup."""
+    os.makedirs(os.path.join(PERSIST_DIR, "images"), exist_ok=True)
+    entries = _read_index()  # newest first
+    if not entries:
+        log.info("No persisted alerts found in %s", PERSIST_DIR)
+        return
+    log.info("Loading %d persisted alerts from disk", len(entries))
+    # Insert oldest-of-recent first so the newest ends up at the right of the deque
+    recent = list(reversed(entries[:MAX_ALERTS]))
+    with _lock:
+        for e in recent:
+            alert = Alert(
+                img_id=e["img_id"],
+                camera=e["camera"],
+                ts_iso=e.get("ts_iso", ""),
+                ts=e.get("ts", 0.0),
+                persons=e.get("persons", 0),
+                dark=bool(e.get("dark", False)),
+                jpeg=b"",
+                jpeg_path=e.get("path", ""),
+            )
+            _alerts.append(alert)
+            _by_id[alert.img_id] = alert
+        # _by_camera = most recent per camera (entries is newest-first)
+        for e in entries:
+            cam = e["camera"]
+            if cam not in _by_camera and e["img_id"] in _by_id:
+                _by_camera[cam] = _by_id[e["img_id"]]
+
+
 # SSE subscriber queues
 _sse_queues: list = []
 _sse_lock = threading.Lock()
@@ -101,6 +248,9 @@ def _store_alert(alert: Alert):
             _by_id.clear()
             for a in _alerts:
                 _by_id[a.img_id] = a
+    # Persist to disk (outside lock)
+    _persist_alert(alert)
+    _rotate_disk()
     # Notify SSE subscribers
     event = "data: " + json.dumps(alert.to_dict()) + "\n\n"
     with _sse_lock:
@@ -543,9 +693,9 @@ def stream():
 
 @app.route("/api/alerts/camera/<path:camera>")
 def api_camera_alerts(camera: str):
-    """Return all alerts for a specific camera (newest first)."""
-    with _lock:
-        items = [a.to_dict() for a in reversed(list(_alerts)) if a.camera == camera]
+    """Return all alerts for a specific camera from disk (newest first)."""
+    entries = _read_index()
+    items = [_entry_to_dict(e) for e in entries if e.get("camera") == camera]
     return jsonify(items)
 
 
@@ -572,18 +722,26 @@ def api_image(img_id: int):
     """Serve the annotated JPEG for a given alert image id."""
     with _lock:
         alert = _by_id.get(img_id)
-    if alert is None:
-        abort(404)
-    return send_file(
-        io.BytesIO(alert.jpeg),
-        mimetype="image/jpeg",
-        download_name=f"alert_{img_id}.jpg",
-    )
+    if alert is not None and alert.jpeg:
+        return send_file(
+            io.BytesIO(alert.jpeg),
+            mimetype="image/jpeg",
+            download_name=f"alert_{img_id}.jpg",
+        )
+    # Fallback: serve from disk (covers loaded-from-disk and old alerts evicted from RAM)
+    path = _img_path(img_id)
+    if os.path.exists(path):
+        return send_file(path, mimetype="image/jpeg",
+                         download_name=f"alert_{img_id}.jpg")
+    abort(404)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Load persisted alerts from disk before accepting connections
+    _load_persisted()
+
     # Start MQTT listener in a background daemon thread
     t = threading.Thread(target=_start_mqtt, daemon=True, name="mqtt")
     t.start()
