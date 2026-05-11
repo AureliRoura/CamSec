@@ -26,6 +26,7 @@ services:
   # ── Person Detector ──────────────────────────────────────────────────────────
   detector:
     image: ${DETECTOR_IMAGE:-ghcr.io/aureliroura/camsec-detector:latest}
+    build: ./detector
     container_name: camsec-detector
     restart: unless-stopped
     environment:
@@ -62,6 +63,7 @@ services:
   # ── Alert Viewer ─────────────────────────────────────────────────────────────
   viewer:
     image: ${VIEWER_IMAGE:-ghcr.io/aureliroura/camsec-viewer:latest}
+    build: ./viewer
     container_name: camsec-viewer
     restart: unless-stopped
     environment:
