@@ -1,5 +1,9 @@
 # CamSec – Eines d'escriptori
 
+> 🌐 **Idioma / Language:** [Català](#camsec--eines-descriptori) · [English](#desktop-tools--english)
+
+---
+
 Eines locals per interactuar amb el sistema CamSec sense necessitar el servidor Docker.
 
 ---

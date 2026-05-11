@@ -1,5 +1,9 @@
 # CamSec – ESP32-CAM firmware
 
+> 🌐 **Idioma / Language:** [Català](#camsec--esp32-cam-firmware) · [English](#camsec--esp32-cam-firmware--english)
+
+---
+
 Firmware per a una placa **AI-Thinker ESP32-CAM** (OV2640) que captura imatges JPEG periòdicament i les envia per MQTT dividides en chunks binaris. Inclou un portal web de configuració accessible via Wi-Fi en mode punt d'accés.
 
 ---
@@ -215,3 +219,95 @@ c.loop_forever()
 - Les contrasenyes **mai** es pre-omplen en el formulari web.
 - La connexió MQTT és en text pla (port 1883). Per a entorns exposats, considera usar un broker amb TLS (port 8883) i ajusta la biblioteca PubSubClient per usar `WiFiClientSecure`.
 - La xarxa del portal de configuració (`CamSec-Config`) és oberta internament però protegida amb contrasenya WPA2.
+
+---
+
+---
+
+# CamSec – ESP32-CAM Firmware — English
+
+Firmware for an **AI-Thinker ESP32-CAM** board (OV2640) that periodically captures JPEG images and sends them over MQTT split into binary chunks. Includes a web configuration portal accessible via Wi-Fi in access point mode.
+
+## Features
+
+| Feature | Detail |
+|---|---|
+| Image capture | Every **5.5 s** in JPEG format |
+| Resolution | UXGA (1600×1200) with PSRAM · VGA (640×480) without |
+| Low-light detection | AGC gain ≥ 25 → activates flash LED |
+| MQTT transmission | Image split into **4 096-byte** chunks |
+| MQTT commands | `start` · `stop` |
+| Camera orientation | 180° rotation configurable from the web portal |
+| Configuration mode | Web portal in access point mode (hold BOOT for 5 s at boot) |
+
+## Development environment
+
+1. Install **VS Code** and the **PlatformIO IDE** extension.
+2. Open the `camara/` folder in VS Code (File → Open Folder…).
+3. Build once to download the toolchain and libraries:
+   - `Ctrl+Shift+P` → **PlatformIO: Build** — or — `pio run` in the terminal.
+
+If IntelliSense shows `Cannot open source file "Arduino.h"`, run  
+`Ctrl+Shift+P` → **PlatformIO: Rebuild IntelliSense Index** after the first successful build.
+
+## Flashing the firmware
+
+1. Connect `GPIO0` to `GND` (flash mode).
+2. Connect the UART adapter and power the board.
+3. Run `pio run --target upload` (or use the PlatformIO Upload button).
+4. Disconnect `GPIO0` from `GND` and press **RST**.
+
+## Camera configuration (AP mode)
+
+1. Power the camera. During the first **5 seconds** the red LED blinks fast.
+2. Press **BOOT (GPIO0)** while the LED blinks → enters configuration mode.
+3. Connect to Wi-Fi **`CamSec-Config`** (password: `camsec123`).
+4. Open **http://192.168.4.1** in a browser.
+5. Fill in the form (Wi-Fi SSID/password, MQTT broker IP, port, credentials, client ID, prefix, orientation) and click **Save & Restart**.
+
+### Camera orientation
+
+If the camera is mounted **upside down**, enable 180° rotation in the portal:  
+Configuration mode → **Camera** section → select **Upside down (rotate 180°)** → Save & Restart.
+
+The firmware applies `vflip + hmirror` to the OV2640 sensor at boot — images are already correctly oriented with no per-capture overhead.
+
+## MQTT topics
+
+Replace `cam/01` with the prefix you configured.
+
+| Topic | Direction | Format | Description |
+|---|---|---|---|
+| `cam/01/cmd` | Subscribe | text | `start` or `stop` |
+| `cam/01/status` | Publish | text | `online` · `capturing` · `idle` · `offline` |
+| `cam/01/image/begin` | Publish | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
+| `cam/01/image/data` | Publish | binary | `[4B id BE][2B chunk_idx BE][JPEG data]` |
+| `cam/01/image/end` | Publish | JSON | `{"id":1,"chunks":11,"ok":1}` |
+
+## Adjustable parameters (`main.cpp`)
+
+| Constant | Default | Description |
+|---|---|---|
+| `CAPTURE_INTERVAL_MS` | 5500 | Interval between captures (ms) |
+| `CHUNK_SIZE` | 4096 | MQTT chunk size (bytes) |
+| `LOW_LIGHT_AGC_TH` | 25 | AGC threshold for low-light detection (0–30) |
+| `FLASH_DELAY_MS` | 80 | Flash warm-up delay before capture (ms) |
+| `CONFIG_HOLD_MS` | 3000 | ms to hold BOOT to enter configuration mode |
+
+## Camera LED
+
+| State | Red LED (GPIO33) |
+|---|---|
+| Configuration window (5 s at boot) | Fast blink (100 ms ON / 500 ms OFF) |
+| Configuration mode active (AP portal) | Slow blink (50 ms ON / 2 s OFF) |
+| Capturing images | 2 quick flashes every 3 s |
+| Capture stopped (`stop`) | 1 flash every 3 s |
+| Reconnecting MQTT | Off |
+| Night capture flash | White LED (GPIO4), momentarily |
+
+## Security notes
+
+- Wi-Fi and MQTT credentials are stored in the ESP32 **NVS** (flash, optionally encrypted with eFuse secure boot).
+- Passwords are **never** pre-filled in the web form.
+- The MQTT connection is plain-text (port 1883). For internet-exposed deployments, use a TLS-enabled broker (port 8883) with `WiFiClientSecure` in the firmware.
+- The configuration AP (`CamSec-Config`) is WPA2-protected.

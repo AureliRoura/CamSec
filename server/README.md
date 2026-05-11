@@ -1,5 +1,9 @@
 # CamSec – Servidor de detecció
 
+> 🌐 **Idioma / Language:** [Català](#camsec--servidor-de-detecció) · [English](#camsec-server--english)
+
+---
+
 Contenidor Docker que subscriu als streams MQTT de les càmeres ESP32-CAM,
 reassembla les imatges JPEG, executa **YOLOv8** per detectar persones i
 publica alertes MQTT amb la imatge anotada (requadres i etiquetes).
@@ -302,3 +306,128 @@ Docker selecciona automàticament l'arquitectura correcta en fer `docker compose
 
 > La imatge del detector instal·la `torch` i `torchvision` des de l'index CPU de PyTorch
 > (`https://download.pytorch.org/whl/cpu`) per garantir compatibilitat amb ARM sense GPU.
+
+---
+
+---
+
+# CamSec Server — English
+
+Docker services that receive MQTT image streams from ESP32-CAM cameras, run **YOLOv8** person detection, and serve the alert history via a web dashboard.
+
+## Quick start
+
+```bash
+cd server
+cp .env.example .env          # fill in your MQTT broker IP and credentials
+docker compose up -d --build
+```
+
+Dashboard: **http://localhost:8088**
+
+## Environment variables
+
+All variables are set in the `.env` file. `docker-compose.yml` passes them automatically to the containers.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MQTT_BROKER` | `localhost` | IP or hostname of the broker |
+| `MQTT_PORT` | `1883` | TCP port of the broker |
+| `DETECTOR_MQTT_USER` | *(empty)* | MQTT username for the detector (optional) |
+| `DETECTOR_MQTT_PASS` | *(empty)* | MQTT password for the detector (optional) |
+| `VIEWER_MQTT_USER` | *(empty)* | MQTT username for the viewer (optional) |
+| `VIEWER_MQTT_PASS` | *(empty)* | MQTT password for the viewer (optional) |
+| `YOLO_MODEL` | `/models/yolov8n.pt` | YOLO model: `n`=nano · `s`=small · `m`=medium |
+| `YOLO_IMGSZ` | `320` | Model input size (px); smaller → less RAM |
+| `CONFIDENCE` | `0.45` | Detection confidence threshold (0.0–1.0) |
+| `CHUNK_SIZE` | `4096` | Chunk size in bytes (must match the camera firmware) |
+| `STALE_TTL_S` | `60` | Discard incomplete image buffers after N seconds |
+| `LOG_LEVEL` | `INFO` | Log level: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
+| `MAX_ALERTS` | `50` | Maximum alerts kept in RAM by the viewer |
+| `PERSIST_DIR` | `/data/alerts` | Path inside the container where images are stored |
+| `MAX_DISK_ALERTS` | `500` | Maximum number of images to keep on disk |
+| `MAX_DISK_DAYS` | `7` | Maximum retention period in days |
+| `ALERTS_DIR` | `/home/pi/camsec-alerts` | **Host** folder bind-mounted into the viewer container |
+
+## Alert persistence
+
+The viewer saves every alert image to the host filesystem and restores the full history on container restart.
+
+```
+$ALERTS_DIR/
+├── index.jsonl          # one JSON line per alert (metadata)
+└── images/
+    ├── 1.jpg
+    └── …
+```
+
+Every 10 alerts the viewer prunes old images: removes files older than `MAX_DISK_DAYS` days and keeps at most `MAX_DISK_ALERTS` images.
+
+## Dashboard & REST API
+
+Access at **http://\<server-ip\>:8088**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/alerts` | Recent alerts in memory (JSON) |
+| `GET` | `/api/alerts/latest` | Latest alert per camera (JSON) |
+| `GET` | `/api/alerts/camera/<prefix>` | Full camera history (from disk) |
+| `DELETE` | `/api/alerts/camera/<prefix>` | Delete all photos for a camera (RAM + disk) |
+| `GET` | `/api/image/<id>` | Serve a JPEG alert image |
+| `DELETE` | `/api/image/<id>` | Delete a specific photo (RAM + disk) |
+| `GET` | `/stream` | Server-Sent Events real-time stream |
+| `GET` | `/embed` | Minimal panel for `<iframe>` embedding |
+
+## MQTT topics
+
+### Consumed (per camera)
+
+| Topic | Format | Description |
+|---|---|---|
+| `<prefix>/image/begin` | JSON | Image start: `{id, size, chunks, dark}` |
+| `<prefix>/image/data` | Binary | Chunk: `[4B id BE][2B idx BE][JPEG data]` |
+| `<prefix>/image/end` | JSON | Image end: `{id, chunks, ok}` |
+
+### Published on detection
+
+| Topic | Format | Description |
+|---|---|---|
+| `detector/status` | text | `online` / `offline` (retained) |
+| `<prefix>/alert` | JSON | Detection summary |
+| `<prefix>/alert/image/begin` | JSON | Start of annotated image |
+| `<prefix>/alert/image/data` | Binary | Annotated image chunk |
+| `<prefix>/alert/image/end` | JSON | End of annotated image |
+
+## YOLO models
+
+| Model | File | Speed | Accuracy |
+|---|---|---|---|
+| Nano | `yolov8n.pt` | ★★★★★ | ★★☆☆☆ |
+| Small | `yolov8s.pt` | ★★★★☆ | ★★★☆☆ |
+| Medium | `yolov8m.pt` | ★★★☆☆ | ★★★★☆ |
+| Large | `yolov8l.pt` | ★★☆☆☆ | ★★★★★ |
+
+Change `YOLO_MODEL` in `.env` and rebuild: `docker compose up --build -d`
+
+## Common operations
+
+```bash
+docker compose down                        # stop
+docker compose logs --tail=100 detector    # last 100 log lines
+docker compose restart detector            # restart without rebuilding
+docker compose up --build -d               # rebuild and restart
+```
+
+## Security
+
+- MQTT credentials must **never** be written in `docker-compose.yml`. Always use `.env` and add it to `.gitignore`.
+- For internet-exposed deployments, use MQTT over TLS (port 8883).
+
+## Platform compatibility
+
+Docker images are multi-architecture (`linux/amd64` + `linux/arm64/v8`). Docker automatically selects the correct architecture when running `docker compose pull`.
+
+| Platform | Architecture | Notes |
+|---|---|---|
+| PC / x86 server | `linux/amd64` | No additional configuration |
+| Raspberry Pi 4/5 | `linux/arm64/v8` | CPU-only PyTorch (no CUDA) |

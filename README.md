@@ -1,5 +1,9 @@
 # CamSec
 
+> 🌐 **Idioma / Language:** [Català](#camsec) · [English](#camsec--english)
+
+---
+
 Sistema de vigilància basat en ESP32-CAM amb detecció de persones per Intel·ligència Artificial.
 
 Les càmeres capturen imatges periòdicament i les envien via MQTT. Un servei de detecció (YOLOv8) analitza les imatges en temps real i genera alertes quan detecta persones. Un dashboard web mostra les últimes fotos de cada càmera i l'historial d'alertes.
@@ -55,22 +59,26 @@ CamSec/
 │   │   └── config.h         # Estructura de configuració (NVS)
 │   └── platformio.ini       # Configuració de la plataforma
 │
-└── server/                  # Serveis Docker
-    ├── docker-compose.yml   # Orquestració dels serveis
-    ├── .env.example         # Plantilla de variables d'entorn
-    ├── mosquitto/           # Broker MQTT
-    │   ├── config/
-    │   │   └── mosquitto.conf
-    │   └── scripts/
-    │       └── entrypoint.sh
-    ├── detector/            # Detecció de persones (YOLOv8)
-    │   ├── detector.py
-    │   ├── Dockerfile
-    │   └── requirements.txt
-    └── viewer/              # Dashboard web
-        ├── viewer.py
-        ├── Dockerfile
-        └── requirements.txt
+├── server/                  # Serveis Docker
+│   ├── docker-compose.yml   # Orquestració dels serveis
+│   ├── .env.example         # Plantilla de variables d'entorn
+│   ├── mosquitto/           # Broker MQTT
+│   │   ├── config/
+│   │   │   └── mosquitto.conf
+│   │   └── scripts/
+│   │       └── entrypoint.sh
+│   ├── detector/            # Detecció de persones (YOLOv8)
+│   │   ├── detector.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   └── viewer/              # Dashboard web
+│       ├── viewer.py
+│       ├── Dockerfile
+│       └── requirements.txt
+│
+└── tools/                   # Eines d'escriptori
+    ├── cam_viewer.py        # Visor en temps real de les càmeres (tkinter)
+    └── .env.example         # Plantilla de variables per al visor
 ```
 
 ---
@@ -308,6 +316,33 @@ Accedeix a **http://\<ip-servidor\>:8088**
 
 ## Operació i manteniment
 
+### Visor d'escriptori (optional)
+
+`tools/cam_viewer.py` és una aplicació d'escriptori (tkinter) que mostra en
+temps real les imatges que envien les càmeres, sense necessitar el servidor
+Docker ni el detector YOLOv8.
+
+**Instal·lació de dependències:**
+```bash
+pip install paho-mqtt Pillow
+```
+
+**Configuració:**
+```bash
+cd tools
+cp .env.example .env
+# edita .env amb la IP del broker i les credencials
+```
+
+**Execució:**
+```bash
+python tools/cam_viewer.py
+# o amb arguments explícits:
+python tools/cam_viewer.py --broker <IP_BROKER> --user <USUARI> --password <CLAU>
+```
+
+---
+
 ### Logs
 
 ```bash
@@ -364,3 +399,181 @@ Edita `YOLO_MODEL` a `docker-compose.yml`:
 | Imatges incompletes / trencades | Paquets MQTT perduts | Augmenta `STALE_TTL_S` al detector |
 | Imatge al revés | Càmera muntada cap per avall | Activa **Cap per avall** al portal de configuració |
 | Detector peta amb exit code 132 a la Pi | PyTorch CUDA en lloc de CPU | Fes `docker compose pull` per obtenir la imatge arm64 CPU-only |
+
+---
+
+---
+
+# CamSec — English
+
+AI-powered surveillance system based on ESP32-CAM cameras.
+
+Cameras periodically capture images and send them via MQTT. A detection service (YOLOv8) analyses the images in real time and generates alerts when a person is detected. A web dashboard shows the latest photo from each camera and a full alert history.
+
+```
+┌─────────────┐   MQTT (JPEG chunks)   ┌──────────────┐   MQTT (alerts)   ┌──────────────┐
+│  ESP32-CAM  │ ─────────────────────► │   Detector   │ ────────────────► │    Viewer    │
+│  (firmware) │                        │  (YOLOv8)    │                   │  (dashboard) │
+└─────────────┘                        └──────────────┘                   └──────────────┘
+                                               │                                  │
+                                        ┌──────┴──────┐                           │
+                                        │   Mosquitto │ ◄─────────────────────────┘
+                                        │  (broker)   │
+                                        └─────────────┘
+```
+
+## Prerequisites
+
+### Hardware
+- **AI-Thinker ESP32-CAM** board (OV2640 sensor)
+- USB-to-TTL adapter (e.g. FTDI FT232RL) for programming
+- USB cable and 5 V / 2 A power supply
+
+### Software — server
+| Tool | Minimum version |
+|---|---|
+| Docker Desktop | 24+ |
+| Docker Compose | V2 (bundled with Docker Desktop) |
+
+### Software — firmware
+| Tool | Minimum version |
+|---|---|
+| VS Code | 1.85+ |
+| PlatformIO IDE extension | 3.3+ |
+
+### Network
+- The MQTT broker and the server must be on the same local network as the cameras.
+- Port **1883** (MQTT) must be open on the server.
+- Port **8088** (web dashboard) must be reachable from the browser.
+
+## Quick start
+
+### 1. Server (Docker)
+
+```bash
+cd server
+cp .env.example .env          # fill in your MQTT broker IP and credentials
+docker compose -f server/docker-compose.yml up -d --build
+```
+
+Dashboard: **http://localhost:8088**
+
+### 2. MQTT broker (Mosquitto)
+
+The broker is **not included** in `docker-compose.yml`. Run it independently:
+
+```bash
+# Native (Debian/Ubuntu)
+sudo apt install mosquitto mosquitto-clients
+sudo systemctl enable --now mosquitto
+```
+
+### 3. Firmware
+
+1. Open `camara/` in VS Code with PlatformIO installed.
+2. Connect GPIO0 to GND (flash mode), then connect the UART adapter.
+3. **Build & Upload** (`Ctrl+Alt+U`) or `pio run -t upload`.
+4. Disconnect GPIO0 from GND and press RST.
+
+### 4. Camera configuration (AP mode)
+
+1. Power the camera. During the first **5 seconds** the red LED blinks fast.
+2. Press **BOOT (GPIO0)** while the LED blinks → enters configuration mode.
+3. Connect to Wi-Fi **`CamSec-Config`** (password: `camsec123`).
+4. Open **http://192.168.4.1** and fill in the form (Wi-Fi, MQTT broker IP, credentials, prefix, orientation).
+5. Click **Save & Restart**.
+
+## Web dashboard
+
+Access at **http://\<server-ip\>:8088**
+
+- **Main view:** one card per camera with the latest detected photo.
+- **History:** click any card to see all photos from that camera.
+- **Delete photos:** 🗑 button on each photo; "Delete all" button to clear a whole camera.
+- **Real time:** cards update automatically via Server-Sent Events (SSE).
+
+### HTTP API
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/alerts` | List of recent alerts (JSON) |
+| `GET /api/alerts/latest` | Latest alert per camera (JSON) |
+| `GET /api/alerts/camera/<prefix>` | Full history for one camera |
+| `DELETE /api/alerts/camera/<prefix>` | Delete all photos for one camera |
+| `GET /api/image/<id>` | JPEG image of a specific alert |
+| `DELETE /api/image/<id>` | Delete a specific photo |
+| `GET /stream` | Server-Sent Events stream |
+| `GET /embed` | Minimal panel for `<iframe>` |
+
+## Desktop viewer (optional)
+
+`tools/cam_viewer.py` is a standalone desktop app (tkinter) that shows live camera images without needing the Docker server or YOLOv8 detector.
+
+```bash
+pip install paho-mqtt Pillow
+cd tools
+cp .env.example .env          # fill in your broker IP and credentials
+python cam_viewer.py
+```
+
+## MQTT topics
+
+| Topic | Direction | Content |
+|---|---|---|
+| `<prefix>/image/begin` | camera → broker | JSON: `{id, size, chunks, dark}` |
+| `<prefix>/image/data`  | camera → broker | Binary: `[4B id][2B idx][JPEG data]` |
+| `<prefix>/image/end`   | camera → broker | JSON: `{id, chunks, ok}` |
+| `<prefix>/cmd`         | broker → camera | `"start"` \| `"stop"` |
+| `<prefix>/status`      | camera → broker | `"online"` \| `"capturing"` \| `"idle"` \| `"offline"` |
+| `<prefix>/alert`       | detector → broker | Detection summary JSON |
+| `<prefix>/alert/image/*` | detector → broker | Annotated JPEG with bounding boxes |
+
+## Camera LED
+
+| State | Red LED (GPIO33) |
+|---|---|
+| Configuration window (5 s at boot) | Fast blink (100 ms ON / 500 ms OFF) |
+| Configuration mode active (AP portal) | Slow blink (50 ms ON / 2 s OFF) |
+| Capturing images | 2 quick flashes every 3 s |
+| Capture stopped (`stop`) | 1 flash every 3 s |
+| Reconnecting MQTT | Off |
+| Night capture flash | White LED (GPIO4), momentarily |
+
+## Operation & maintenance
+
+### Desktop viewer
+
+```bash
+cd tools
+cp .env.example .env
+python cam_viewer.py
+```
+
+### Logs
+
+```bash
+docker compose -f server/docker-compose.yml logs -f           # all services
+docker compose -f server/docker-compose.yml logs -f detector  # detector only
+docker compose -f server/docker-compose.yml logs -f viewer    # viewer only
+```
+
+### Stop / restart
+
+```bash
+docker compose -f server/docker-compose.yml down
+docker compose -f server/docker-compose.yml restart viewer
+docker compose -f server/docker-compose.yml up -d --build
+```
+
+## Troubleshooting
+
+| Symptom | Possible cause | Solution |
+|---|---|---|
+| Camera doesn't connect to Wi-Fi | Wrong SSID/password | Enter config mode and save again |
+| Camera can't reach the MQTT broker | Wrong broker IP or firewall | Check the IP and that port 1883 is open |
+| Dashboard shows no photos | Viewer not connected to broker | Check `docker logs camsec-viewer` |
+| `persons: 0` on all alerts | YOLO model not loaded correctly | Check `docker logs camsec-detector` |
+| AP portal doesn't open | Device not connected to `CamSec-Config` | Connect manually and open http://192.168.4.1 |
+| Incomplete / broken images | Lost MQTT packets | Increase `STALE_TTL_S` in the detector |
+| Image upside down | Camera mounted inverted | Enable **Upside down** in the configuration portal |
+| Detector crashes with exit code 132 on Pi | CUDA PyTorch instead of CPU | Run `docker compose pull` to get the arm64 CPU-only image |
