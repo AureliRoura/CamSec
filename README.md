@@ -295,6 +295,7 @@ Captura JPEG (5.5 s)
 Accedeix a **http://\<ip-servidor\>:8088**
 
 - **Vista principal:** una targeta per càmera amb la **última foto detectada**.
+- **Live:** accedeix a **`/live`** per veure totes les càmeres en temps real (MJPEG).
 - **Historial:** clica qualsevol targeta per veure totes les fotos d'aquella càmera.
 - **Eliminar fotos:** botó 🗑 a cada foto de l'historial; botó "Elimina totes" per buidar tota la càmera.
 - **Temps real:** les targetes s'actualitzen automàticament via Server-Sent Events (SSE).
@@ -309,6 +310,8 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `DELETE /api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera |
 | `GET /api/image/<id>` | Imatge JPEG d'una alerta |
 | `DELETE /api/image/<id>` | Elimina una foto concreta |
+| `GET /live` | Graella live de totes les càmeres (MJPEG) |
+| `GET /stream/camera/<prefix>` | Stream MJPEG d'una càmera concreta |
 | `GET /stream` | Server-Sent Events en temps real |
 | `GET /embed` | Panel mínim per `<iframe>` |
 
@@ -488,6 +491,7 @@ sudo systemctl enable --now mosquitto
 Access at **http://\<server-ip\>:8088**
 
 - **Main view:** one card per camera with the latest detected photo.
+- **Live:** go to **`/live`** for a real-time MJPEG grid of all cameras.
 - **History:** click any card to see all photos from that camera.
 - **Delete photos:** 🗑 button on each photo; "Delete all" button to clear a whole camera.
 - **Real time:** cards update automatically via Server-Sent Events (SSE).
@@ -502,6 +506,8 @@ Access at **http://\<server-ip\>:8088**
 | `DELETE /api/alerts/camera/<prefix>` | Delete all photos for one camera |
 | `GET /api/image/<id>` | JPEG image of a specific alert |
 | `DELETE /api/image/<id>` | Delete a specific photo |
+| `GET /live` | Live MJPEG grid of all cameras |
+| `GET /stream/camera/<prefix>` | MJPEG stream for one specific camera |
 | `GET /stream` | Server-Sent Events stream |
 | `GET /embed` | Minimal panel for `<iframe>` |
 

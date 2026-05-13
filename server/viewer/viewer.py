@@ -6,12 +6,15 @@ Lightweight HTTP server that subscribes to MQTT alert topics, reassembles
 annotated JPEG images and serves them via a real-time web dashboard.
 
 Endpoints:
-  GET /                   – Dashboard (auto-updating, iframe-embeddable)
-  GET /embed              – Minimal panel for embedding in an existing page
-  GET /stream             – Server-Sent Events stream (real-time alerts)
-  GET /api/alerts         – JSON list of recent alerts (all cameras)
-  GET /api/alerts/latest  – JSON: one latest alert per camera
-  GET /api/image/<img_id> – Serve annotated JPEG by id
+  GET /                              – Dashboard (auto-updating, iframe-embeddable)
+  GET /embed                         – Minimal panel for embedding in an existing page
+  GET /stream                        – Server-Sent Events stream (real-time alerts)
+  GET /live                          – MJPEG live view (all cameras in a grid)
+  GET /stream/camera/<prefix>        – MJPEG stream for one camera (only subscribes to
+                                       raw MQTT while at least one client is connected)
+  GET /api/alerts                    – JSON list of recent alerts (all cameras)
+  GET /api/alerts/latest             – JSON: one latest alert per camera
+  GET /api/image/<img_id>            – Serve annotated JPEG by id
 """
 
 import base64
@@ -236,6 +239,13 @@ def _load_persisted() -> None:
 _sse_queues: list = []
 _sse_lock = threading.Lock()
 
+# ─── Live MJPEG stream state ─────────────────────────────────────────────────
+_live_lock   = threading.Lock()
+_live_subs:   Dict[str, int]  = {}   # camera prefix → active client count
+_live_queues: Dict[str, list] = {}   # camera prefix → list[Queue[bytes]]
+_raw_bufs:    Dict[Tuple[str, int], "_ImgBuf"] = {}   # reassembly for raw frames
+_mqtt_client_ref: Optional[mqtt.Client] = None
+
 
 def _store_alert(alert: Alert):
     with _lock:
@@ -287,6 +297,41 @@ _bufs: Dict[Tuple[str, int], _ImgBuf] = {}
 _pending_meta: Dict[Tuple[str, int], dict] = {}  # alert summary may arrive before begin
 
 
+def _subscribe_raw(camera: str) -> None:
+    """Subscribe to raw image MQTT topics for one camera (called when first viewer connects)."""
+    if _mqtt_client_ref is None:
+        return
+    for action in ("begin", "data", "end"):
+        _mqtt_client_ref.subscribe(f"{camera}/image/{action}", 0)
+    log.debug("Subscribed to raw topics for camera '%s'", camera)
+
+
+def _unsubscribe_raw(camera: str) -> None:
+    """Unsubscribe raw image topics when the last viewer disconnects."""
+    if _mqtt_client_ref is None:
+        return
+    for action in ("begin", "data", "end"):
+        _mqtt_client_ref.unsubscribe(f"{camera}/image/{action}")
+    log.debug("Unsubscribed from raw topics for camera '%s'", camera)
+
+
+def _push_raw_frame(camera: str, jpeg: bytes) -> None:
+    """Distribute a reassembled raw JPEG to all active MJPEG clients for this camera."""
+    with _live_lock:
+        queues = list(_live_queues.get(camera, []))
+    for q in queues:
+        # If the queue is full the client is too slow — drop the oldest frame
+        if q.full():
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+        try:
+            q.put_nowait(jpeg)
+        except queue.Full:
+            pass
+
+
 def _on_connect(client, userdata, flags, rc):
     if rc == 0:
         log.info("MQTT connected to %s:%d", MQTT_BROKER, MQTT_PORT)
@@ -322,6 +367,46 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
             _pending_meta[key] = meta
             if key in _bufs:
                 _bufs[key].meta = meta
+            return
+
+        # ── raw camera image (live MJPEG streaming) ──
+        # Topic format: <prefix>/image/<action>  (no "alert" segment)
+        if (len(parts) >= 3 and parts[-2] == "image"
+                and (len(parts) < 4 or parts[-3] != "alert")):
+            prefix = "/".join(parts[:-2])
+            with _live_lock:
+                has_viewers = _live_subs.get(prefix, 0) > 0
+            if not has_viewers:
+                return
+            if action == "begin":
+                meta   = json.loads(msg.payload)
+                img_id = int(meta["id"])
+                _raw_bufs[(prefix, img_id)] = _ImgBuf(
+                    prefix=prefix,
+                    img_id=img_id,
+                    chunks=int(meta["chunks"]),
+                    dark=bool(meta.get("dark", 0)),
+                )
+            elif action == "data":
+                if len(msg.payload) < 6:
+                    return
+                img_id = struct.unpack_from(">I", msg.payload, 0)[0]
+                idx    = struct.unpack_from(">H", msg.payload, 4)[0]
+                key    = (prefix, img_id)
+                if key in _raw_bufs:
+                    _raw_bufs[key].data[idx] = bytes(msg.payload[6:])
+            elif action == "end":
+                meta   = json.loads(msg.payload)
+                img_id = int(meta["id"])
+                key    = (prefix, img_id)
+                buf    = _raw_bufs.pop(key, None)
+                if buf and meta.get("ok", 0) and buf.complete():
+                    _push_raw_frame(prefix, buf.assemble())
+                    # Prune stale raw buffers older than 60 s
+                    stale = [k for k, b in list(_raw_bufs.items())
+                             if time.monotonic() - b.ts > 60]
+                    for k in stale:
+                        _raw_bufs.pop(k, None)
             return
 
         # ── alert image begin / data / end ──
@@ -389,6 +474,7 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
 
 
 def _start_mqtt():
+    global _mqtt_client_ref
     client = mqtt.Client(
         client_id=MQTT_CLIENT,
         protocol=mqtt.MQTTv311,
@@ -399,6 +485,7 @@ def _start_mqtt():
     client.on_connect    = _on_connect
     client.on_disconnect = _on_disconnect
     client.on_message    = _on_message
+    _mqtt_client_ref = client
 
     while True:
         try:
@@ -711,6 +798,142 @@ def embed():
     return Response(_EMBED_HTML, mimetype="text/html")
 
 
+_LIVE_HTML = """
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+  <meta charset="utf-8">
+  <title>CamSec \u2013 Live</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',Arial,sans-serif}
+    header{background:#161b22;border-bottom:1px solid #30363d;padding:.6em 1em;
+           display:flex;align-items:center;gap:1.2em}
+    header h1{color:#58a6ff;font-size:1.05em;font-weight:700}
+    header a{color:#8b949e;text-decoration:none;font-size:.85em}
+    header a:hover{color:#c9d1d9}
+    #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));
+          gap:12px;padding:12px}
+    .card{background:#161b22;border:1px solid #30363d;border-radius:6px;overflow:hidden}
+    .card-hdr{padding:.35em .8em;font-size:.82em;color:#8b949e;
+              border-bottom:1px solid #30363d;display:flex;justify-content:space-between}
+    .card-hdr span{color:#58a6ff;font-weight:700}
+    .card img{width:100%;display:block;background:#0d1117;min-height:180px;
+              transition:opacity .3s}
+    #empty{color:#484f58;text-align:center;padding:5em 1em;font-size:1.05em}
+  </style>
+</head>
+<body>
+<header>
+  <h1>\U0001F4F7 CamSec \u2013 Live</h1>
+  <a href="/">\u2190 Dashboard d'alertes</a>
+</header>
+<div id="grid"><p id="empty">Cercant c\u00e0meres\u2026</p></div>
+<script>
+  const known = new Set();
+  function refresh() {
+    fetch('/api/alerts/latest').then(r => r.json()).then(data => {
+      const grid = document.getElementById('grid');
+      const empty = document.getElementById('empty');
+      if (!data.length) {
+        if (empty) empty.textContent = 'Sense c\u00e0meres. Les c\u00e0meres apareixeran quan enviïn la primera alerta.';
+        return;
+      }
+      if (empty) empty.remove();
+      data.forEach(a => {
+        if (known.has(a.camera)) return;
+        known.add(a.camera);
+        const ts = new Date(a.ts_iso).toLocaleTimeString();
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.id = 'cam-' + a.camera.replace(/[^a-z0-9]/gi, '_');
+        card.innerHTML = `
+          <div class="card-hdr">
+            <span>\u25cf ${a.camera}</span>
+            <span id="ts-${a.camera.replace(/[^a-z0-9]/gi,'_')}">${ts}</span>
+          </div>
+          <img src="/stream/camera/${a.camera}" alt="${a.camera}"
+               onerror="this.style.opacity='.25'">`;
+        grid.appendChild(card);
+      });
+    }).catch(() => {});
+  }
+  refresh();
+  setInterval(refresh, 10000);
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/live")
+def live():
+    """MJPEG live view – one grid card per camera."""
+    return Response(_LIVE_HTML, mimetype="text/html")
+
+
+@app.route("/stream/camera/<path:camera>")
+def stream_camera(camera: str):
+    """MJPEG stream for a single camera.
+
+    Subscribes to the camera's raw MQTT image topics while at least one
+    client is connected, and unsubscribes automatically when the last
+    client disconnects.  Frame rate matches the camera capture interval.
+    """
+    q: queue.Queue = queue.Queue(maxsize=2)
+
+    # Register this client
+    with _live_lock:
+        _live_subs[camera] = _live_subs.get(camera, 0) + 1
+        if camera not in _live_queues:
+            _live_queues[camera] = []
+        _live_queues[camera].append(q)
+        first_client = _live_subs[camera] == 1
+
+    if first_client:
+        _subscribe_raw(camera)
+        log.info("Live stream started for camera '%s'", camera)
+
+    _BOUNDARY = b"--frame"
+
+    def generate():
+        try:
+            while True:
+                try:
+                    jpeg = q.get(timeout=35)
+                    yield (
+                        _BOUNDARY
+                        + b"\r\nContent-Type: image/jpeg\r\n\r\n"
+                        + jpeg
+                        + b"\r\n"
+                    )
+                except queue.Empty:
+                    # Send an empty boundary comment to keep the connection alive
+                    yield _BOUNDARY + b"\r\nContent-Length: 0\r\n\r\n"
+        except GeneratorExit:
+            pass
+        finally:
+            with _live_lock:
+                _live_subs[camera] = max(0, _live_subs.get(camera, 0) - 1)
+                lst = _live_queues.get(camera, [])
+                if q in lst:
+                    lst.remove(q)
+                last_client = _live_subs[camera] == 0
+            if last_client:
+                _unsubscribe_raw(camera)
+                log.info("Live stream stopped for camera '%s'", camera)
+
+    return Response(
+        generate(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.route("/stream")
 def stream():
     """Server-Sent Events – push new alerts to subscribed browsers."""
@@ -808,9 +1031,43 @@ def api_image(img_id: int):
     abort(404)
 
 
+@app.route("/api/alerts")
+def api_alerts():
+    """JSON list of recent in-memory alerts, newest first."""
+    from flask import request as freq
+    try:
+        limit = int(freq.args.get("limit", MAX_ALERTS))
+    except (ValueError, TypeError):
+        limit = MAX_ALERTS
+    with _lock:
+        items = [a.to_dict() for a in reversed(list(_alerts))]
+    return jsonify(items[:limit])
+
+
+@app.route("/api/alerts/latest")
+def api_alerts_latest():
+    """JSON: one latest alert per camera.
+
+    Returns data from memory when available; falls back to disk so the
+    /live page works even after a container restart with no new alerts.
+    """
+    with _lock:
+        mem = {cam: a.to_dict() for cam, a in _by_camera.items()}
+
+    # Supplement with disk entries for cameras not yet in memory
+    try:
+        seen: Dict[str, dict] = dict(mem)
+        for e in _read_index():
+            cam = e.get("camera", "")
+            if cam and cam not in seen:
+                seen[cam] = _entry_to_dict(e)
+        return jsonify(list(seen.values()))
+    except Exception:
+        return jsonify(list(mem.values()))
+
+
 @app.route("/api/alerts/camera/<path:camera>", methods=["GET", "DELETE"])
 def api_camera_alerts(camera: str):
-    """GET: all alerts for camera from disk. DELETE: remove all."""
     from flask import request as freq
     if freq.method == "DELETE":
         entries = _read_index()

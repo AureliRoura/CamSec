@@ -174,6 +174,7 @@ docker compose restart viewer
 Accedeix a **http://\<ip-servidor\>:8088**
 
 - **Vista principal** — una targeta per càmera amb la darrera foto detectada.
+- **Live** — accedeix a **`/live`** per veure totes les càmeres en directe (MJPEG). Se subscriu als topics MQTT de la càmera únicament mentre hi ha algun client connectat.
 - **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (llegeix del disc, no només de la RAM).
 - **Eliminar fotos** — botó 🗑️ a cada foto de l'historial per eliminar-la individualment; botó **Elimina totes** a la capçalera del modal per buidar tota la càmera.
 - **Temps real** — s'actualitza automàticament via Server-Sent Events (SSE) sense cal recarregar la pàgina.
@@ -189,6 +190,8 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `DELETE` | `/api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera (RAM + disc) |
 | `GET` | `/api/image/<id>` | Serveix el JPEG d'una alerta concreta |
 | `DELETE` | `/api/image/<id>` | Elimina una foto concreta (RAM + disc) |
+| `GET` | `/live` | Graella live de totes les càmeres (MJPEG) |
+| `GET` | `/stream/camera/<prefix>` | Stream MJPEG d'una càmera concreta |
 | `GET` | `/stream` | Server-Sent Events en temps real |
 | `GET` | `/embed` | Panel mínim per `<iframe>` |
 
@@ -375,6 +378,8 @@ Access at **http://\<server-ip\>:8088**
 | `DELETE` | `/api/alerts/camera/<prefix>` | Delete all photos for a camera (RAM + disk) |
 | `GET` | `/api/image/<id>` | Serve a JPEG alert image |
 | `DELETE` | `/api/image/<id>` | Delete a specific photo (RAM + disk) |
+| `GET` | `/live` | Live MJPEG grid of all cameras |
+| `GET` | `/stream/camera/<prefix>` | MJPEG stream for one specific camera |
 | `GET` | `/stream` | Server-Sent Events real-time stream |
 | `GET` | `/embed` | Minimal panel for `<iframe>` embedding |
 
