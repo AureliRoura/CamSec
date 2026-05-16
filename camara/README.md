@@ -14,7 +14,7 @@ Firmware per a una placa **AI-Thinker ESP32-CAM** (OV2640) que captura imatges J
 |---|---|
 | Captura d'imatges | Cada **5,5 s** en format JPEG |
 | Resolució | UXGA (1600×1200) amb PSRAM · VGA (640×480) sense |
-| Detecció de poca llum | Gain AGC ≥ 25 → activa el LED de flaix |
+| Detecció de poca llum | Frame de prova > 200 KB → activa el LED de flaix |
 | Enviament per MQTT | Imatge dividida en chunks de **4 096 bytes** |
 | Comandes MQTT | `start` · `stop` |
 | Orientació de la càmera | Rotació 180° configurable des del portal web |
@@ -117,8 +117,8 @@ Si ja has compilat i l'error persisteix:
 
 ## Mode configuració (primera arrencada)
 
-1. Mantén el botó **BOOT** (GPIO0) premut durant **3 s** mentre encens la placa.
-   - El LED parpellejarà ràpidament durant el compte enrere.
+1. Encén la placa. Durant els primers **5 s** el LED vermell parpellejarà ràpidament.
+2. Prem el botó **BOOT** (GPIO0) en qualsevol moment durant aquells 5 s.
 2. Connecta't a la xarxa Wi-Fi:
    - **SSID**: `CamSec-Config`
    - **Contrasenya**: `camsec123`
@@ -145,11 +145,23 @@ Substitueix `cam/01` pel prefix configurat.
 
 | Topic | Direcció | Format | Descripció |
 |---|---|---|---|
-| `cam/01/cmd` | Subscripció | text | `start` o `stop` |
+| `cam/01/cmd` | Subscripció | text | `start` · `stop` · `flash_on` · `flash_off` · `flash_auto` |
 | `cam/01/status` | Publicació | text | `online` · `capturing` · `idle` · `offline` |
 | `cam/01/image/begin` | Publicació | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
 | `cam/01/image/data` | Publicació | binari | `[4B id BE][2B chunk_idx BE][dades JPEG]` |
 | `cam/01/image/end` | Publicació | JSON | `{"id":1,"chunks":11,"ok":1}` |
+
+### Comandes MQTT (`<prefix>/cmd`)
+
+| Comanda | Efecte |
+|---|---|
+| `start` | Inicia les captures periòdiques |
+| `stop` | Atura les captures; apaga el flaix |
+| `flash_on` | Força el flaix **sempre encès** en cada captura |
+| `flash_off` | Força el flaix **sempre apagat** (ignora la detecció de llum) |
+| `flash_auto` | Restaura la detecció automàtica de poca llum (mode per defecte) |
+
+> `flash_on`/`flash_off` persisteixen fins que s'envia `flash_auto` o es reinicia la placa.
 
 ### Reconstrucció d'imatge (exemple Python)
 
@@ -194,9 +206,9 @@ c.loop_forever()
 |---|---|---|
 | `CAPTURE_INTERVAL_MS` | 5500 | Interval entre captures (ms) |
 | `CHUNK_SIZE` | 4096 | Mida de cada chunk MQTT (bytes) |
-| `LOW_LIGHT_AGC_TH` | 25 | Llindar AGC per detectar poca llum (0-30) |
+| `LOW_LIGHT_SIZE_TH` | 200000 | Mida del frame de prova (bytes) per sobre = fosc → flash |
 | `FLASH_DELAY_MS` | 80 | Temps d'espera del flaix abans de capturar (ms) |
-| `CONFIG_HOLD_MS` | 3000 | ms que cal mantenir BOOT per entrar en mode config |
+| `CONFIG_WINDOW_MS` | 5000 | Finestra d'espera al boot per prémer BOOT (ms) |
 
 ---
 
@@ -234,7 +246,7 @@ Firmware for an **AI-Thinker ESP32-CAM** board (OV2640) that periodically captur
 |---|---|
 | Image capture | Every **5.5 s** in JPEG format |
 | Resolution | UXGA (1600×1200) with PSRAM · VGA (640×480) without |
-| Low-light detection | AGC gain ≥ 25 → activates flash LED |
+| Low-light detection | Probe frame > 200 KB → activates flash LED |
 | MQTT transmission | Image split into **4 096-byte** chunks |
 | MQTT commands | `start` · `stop` |
 | Camera orientation | 180° rotation configurable from the web portal |
@@ -278,11 +290,23 @@ Replace `cam/01` with the prefix you configured.
 
 | Topic | Direction | Format | Description |
 |---|---|---|---|
-| `cam/01/cmd` | Subscribe | text | `start` or `stop` |
+| `cam/01/cmd` | Subscribe | text | `start` · `stop` · `flash_on` · `flash_off` · `flash_auto` |
 | `cam/01/status` | Publish | text | `online` · `capturing` · `idle` · `offline` |
 | `cam/01/image/begin` | Publish | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
 | `cam/01/image/data` | Publish | binary | `[4B id BE][2B chunk_idx BE][JPEG data]` |
 | `cam/01/image/end` | Publish | JSON | `{"id":1,"chunks":11,"ok":1}` |
+
+## MQTT commands (`<prefix>/cmd`)
+
+| Command | Effect |
+|---|---|
+| `start` | Start periodic captures |
+| `stop` | Stop captures; turn off flash |
+| `flash_on` | Force flash **always on** for every capture |
+| `flash_off` | Force flash **always off** (ignore low-light detection) |
+| `flash_auto` | Restore automatic low-light detection (default) |
+
+> `flash_on`/`flash_off` persist until `flash_auto` is sent or the board is rebooted.
 
 ## Adjustable parameters (`main.cpp`)
 
@@ -290,9 +314,9 @@ Replace `cam/01` with the prefix you configured.
 |---|---|---|
 | `CAPTURE_INTERVAL_MS` | 5500 | Interval between captures (ms) |
 | `CHUNK_SIZE` | 4096 | MQTT chunk size (bytes) |
-| `LOW_LIGHT_AGC_TH` | 25 | AGC threshold for low-light detection (0–30) |
+| `LOW_LIGHT_SIZE_TH` | 200000 | Probe frame size (bytes) above this = dark → flash |
 | `FLASH_DELAY_MS` | 80 | Flash warm-up delay before capture (ms) |
-| `CONFIG_HOLD_MS` | 3000 | ms to hold BOOT to enter configuration mode |
+| `CONFIG_WINDOW_MS` | 5000 | Boot window to press BOOT for config mode (ms) |
 
 ## Camera LED
 
