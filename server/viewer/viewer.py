@@ -28,7 +28,7 @@ from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
-from flask import Flask, Response, jsonify, render_template_string, send_file, abort
+from flask import Flask, Response, jsonify, render_template_string, send_file, abort, request
 import paho.mqtt.client as mqtt
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -162,6 +162,7 @@ class _ImgBuf:
 
 _bufs: Dict[Tuple[str, int], _ImgBuf] = {}
 _raw_bufs: Dict[Tuple[str, int], _ImgBuf] = {}
+_pending_meta: Dict[Tuple[str, int], dict] = {}  # meta arrives before begin
 
 
 def _on_connect(client, userdata, flags, rc):
@@ -202,10 +203,12 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
         if action == "alert" and len(parts) >= 2:
             meta = json.loads(msg.payload)
             prefix = "/".join(parts[:-1])
-            # Store meta for when the image arrives
             key = (prefix, int(meta.get("image_id", 0)))
+            # If buffer already exists apply immediately, otherwise park it
             if key in _bufs:
                 _bufs[key].meta = meta
+            else:
+                _pending_meta[key] = meta
             return
 
         # ── alert image begin / data / end ──
@@ -217,12 +220,16 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
                 meta   = json.loads(msg.payload)
                 img_id = int(meta["id"])
                 key    = (prefix, img_id)
-                _bufs[key] = _ImgBuf(
+                buf = _ImgBuf(
                     prefix=prefix,
                     img_id=img_id,
                     chunks=int(meta["chunks"]),
                     dark=bool(meta.get("dark", 0)),
                 )
+                # Apply pre-arrived alert metadata if available
+                if key in _pending_meta:
+                    buf.meta = _pending_meta.pop(key)
+                _bufs[key] = buf
 
             elif action == "data":
                 if len(msg.payload) < 6:
@@ -363,13 +370,51 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CamSec – Alertes</title>
 """ + _STYLE + """
+<style>
+.card{cursor:pointer}
+.card .cam-label{font-size:.88em;font-weight:600;color:#c9d1d9;
+  padding:.4em .7em .1em;display:flex;align-items:center;gap:.4em}
+.card .cam-label .dot-cam{width:8px;height:8px;border-radius:50%;
+  background:#3fb950;flex-shrink:0}
+/* Modal */
+#backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);
+  z-index:200;overflow-y:auto;padding:2em 1em}
+#backdrop.open{display:flex;flex-direction:column;align-items:center}
+#modal{background:#161b22;border:1px solid #30363d;border-radius:10px;
+  width:100%;max-width:960px}
+#modal-hdr{display:flex;align-items:center;gap:.6em;padding:.65em 1em;
+  border-bottom:1px solid #30363d}
+#modal-title{font-weight:600;color:#c9d1d9;flex:1;font-size:.95em}
+#btn-del-all{background:#7f1d1d;color:#fca5a5;border:1px solid #991b1b;
+  border-radius:5px;padding:.28em .75em;font-size:.8em;cursor:pointer}
+#btn-del-all:hover{background:#991b1b}
+#modal-close{background:none;border:none;color:#8b949e;font-size:1.3em;
+  cursor:pointer;line-height:1;padding:.1em .3em}
+#modal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  gap:.65em;padding:.85em}
+.hi{position:relative;border-radius:6px;overflow:hidden;
+  background:#0d1117;border:1px solid #30363d}
+.hi img{width:100%;display:block;object-fit:cover;max-height:155px}
+.hi .hi-info{padding:.3em .5em;font-size:.72em;color:#8b949e;line-height:1.5}
+.hi .hi-del{position:absolute;top:.3em;right:.3em;
+  background:rgba(127,29,29,.9);border:none;border-radius:4px;
+  color:#fca5a5;font-size:.85em;cursor:pointer;padding:.18em .4em;
+  display:none;line-height:1}
+.hi:hover .hi-del{display:block}
+nav a{color:#58a6ff;font-size:.85em;text-decoration:none}
+nav a:hover{text-decoration:underline}
+</style>
 </head>
 <body>
 <header>
   <div class="dot" id="dot"></div>
-  <h1>&#128247; CamSec – Alertes de presència</h1>
-  <span style="margin-left:auto;font-size:.8em;color:#484f58" id="counter">0 alertes</span>
+  <h1>&#128247; CamSec – Alertes</h1>
+  <nav style="margin-left:auto;display:flex;gap:1em">
+    <a href="/live">Directe</a>
+    <a href="/help">Ajuda</a>
+  </nav>
 </header>
+
 <div id="grid">
   <div id="empty">
     <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
@@ -380,53 +425,144 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <p style="font-size:.8em;margin-top:.4em">Les alertes apareixeran aquí en temps real quan es detecti una persona.</p>
   </div>
 </div>
-<script>
-const grid    = document.getElementById('grid');
-const empty   = document.getElementById('empty');
-const counter = document.getElementById('counter');
-const dot     = document.getElementById('dot');
-let count     = 0;
 
-// Load existing alerts on page load
-fetch('/api/alerts').then(r=>r.json()).then(data=>{
-  data.reverse().forEach(addCard);
+<!-- Historial modal -->
+<div id="backdrop">
+  <div id="modal">
+    <div id="modal-hdr">
+      <span id="modal-title">Historial</span>
+      <button id="btn-del-all">&#128465; Elimina totes</button>
+      <button id="modal-close">&#x2715;</button>
+    </div>
+    <div id="modal-grid"></div>
+  </div>
+</div>
+
+<script>
+const grid       = document.getElementById('grid');
+const dot        = document.getElementById('dot');
+const backdrop   = document.getElementById('backdrop');
+const modalGrid  = document.getElementById('modal-grid');
+const modalTitle = document.getElementById('modal-title');
+const btnDelAll  = document.getElementById('btn-del-all');
+const camCards   = {};      // camera -> card element
+let   currentCam = null;
+
+// ── Carrega última alerta per càmera ─────────────────────────────────────────
+fetch('/api/alerts/latest').then(r=>r.json()).then(list=>{
+  list.forEach(a => upsertCard(a));
 });
 
-// Subscribe to real-time SSE stream
+// ── SSE: actualitza la targeta quan arriba nova alerta ────────────────────────
 const es = new EventSource('/stream');
-es.onmessage = e => {
-  const alert = JSON.parse(e.data);
-  addCard(alert, true);
-};
-es.onerror = () => { dot.style.background='#f85149'; };
-es.onopen  = () => { dot.style.background='#3fb950'; };
+es.onmessage = e => upsertCard(JSON.parse(e.data));
+es.onerror   = () => { dot.style.background='#f85149'; };
+es.onopen    = () => { dot.style.background='#3fb950'; };
 
-function addCard(a, prepend=false) {
-  if (empty.parentNode === grid) grid.removeChild(empty);
-  count++;
-  counter.textContent = count + (count===1?' alerta':' alertes');
+// ── Una targeta per càmera ────────────────────────────────────────────────────
+function upsertCard(a) {
+  const empty = document.getElementById('empty');
+  if (empty) empty.remove();
+
+  if (camCards[a.camera]) {
+    const c = camCards[a.camera];
+    c.querySelector('img').src = a.url + '?t=' + Date.now();
+    c.querySelector('.ts').textContent = fmtTs(a.ts_iso);
+    c.querySelector('.persons').textContent = '\\u{1F464} ' + a.persons + ' persona(es)';
+    c.querySelector('.dark-tag').style.display = a.dark ? 'inline-block' : 'none';
+    return;
+  }
 
   const card = document.createElement('div');
   card.className = 'card';
-  const tags = (a.dark ? '<span class="tag dark">&#127769; Poca llum</span>' : '')
-             + '<span class="tag person">&#128100; '+ a.persons +' persona(es)</span>';
   card.innerHTML = `
-    <a href="${a.url}" target="_blank">
-      <img src="${a.url}" loading="lazy" alt="Alerta ${a.img_id}">
-    </a>
+    <div class="cam-label"><span class="dot-cam"></span>${a.camera}</div>
+    <img src="${a.url}" loading="lazy" alt="${a.camera}">
     <div class="info">
-      <div>${tags}</div>
-      <div style="margin-top:.4em">
-        <b>Càmera:</b> ${a.camera}<br>
-        <b>Data:</b> ${a.ts_iso.replace('T',' ').replace('Z',' UTC')}<br>
-        <b>Imatge ID:</b> ${a.img_id}
-      </div>
+      <span class="dark-tag tag dark" style="display:${a.dark?'inline-block':'none'}">&#127769; Poca llum</span>
+      <span class="tag person persons">&#128100; ${a.persons} persona(es)</span><br>
+      <span class="ts" style="font-size:.8em">${fmtTs(a.ts_iso)}</span>
     </div>`;
-  if (prepend && grid.firstChild) {
-    grid.insertBefore(card, grid.firstChild);
-  } else {
-    grid.appendChild(card);
-  }
+  card.addEventListener('click', () => openHistory(a.camera));
+  camCards[a.camera] = card;
+  grid.appendChild(card);
+}
+
+// ── Modal historial ───────────────────────────────────────────────────────────
+function openHistory(camera) {
+  currentCam = camera;
+  modalTitle.textContent = 'Historial – ' + camera;
+  modalGrid.innerHTML = '<p style="padding:1em;color:#484f58">Carregant…</p>';
+  backdrop.classList.add('open');
+  refreshHistory();
+}
+
+function refreshHistory() {
+  if (!currentCam) return;
+  fetch('/api/alerts/camera/' + currentCam)
+    .then(r => r.json())
+    .then(list => {
+      modalGrid.innerHTML = '';
+      if (!list.length) {
+        modalGrid.innerHTML = '<p style="padding:1em;color:#484f58">Sense fotos.</p>';
+        return;
+      }
+      list.forEach(a => modalGrid.appendChild(makeHistItem(a)));
+    });
+}
+
+function makeHistItem(a) {
+  const div = document.createElement('div');
+  div.className = 'hi';
+  div.innerHTML = `
+    <img src="${a.url}" loading="lazy" alt="${a.img_id}">
+    <button class="hi-del" title="Elimina">&#128465;</button>
+    <div class="hi-info">
+      ${a.dark ? '<span class="tag dark">&#127769;</span> ' : ''}
+      <span class="tag person">&#128100; ${a.persons}</span><br>
+      ${fmtTs(a.ts_iso)}
+    </div>`;
+  div.querySelector('.hi-del').addEventListener('click', e => {
+    e.stopPropagation();
+    fetch('/api/image/' + a.img_id, {method:'DELETE'}).then(r => {
+      if (r.ok) {
+        div.remove();
+        // If camera card existed and this was the only photo, remove the card
+        if (!modalGrid.querySelector('.hi') && camCards[currentCam]) {
+          camCards[currentCam].remove();
+          delete camCards[currentCam];
+          closeModal();
+        }
+      }
+    });
+  });
+  return div;
+}
+
+// ── Elimina totes ─────────────────────────────────────────────────────────────
+btnDelAll.addEventListener('click', () => {
+  if (!currentCam) return;
+  if (!confirm('Eliminar totes les fotos de ' + currentCam + '?')) return;
+  fetch('/api/alerts/camera/' + currentCam, {method:'DELETE'}).then(r => {
+    if (r.ok) {
+      if (camCards[currentCam]) { camCards[currentCam].remove(); delete camCards[currentCam]; }
+      closeModal();
+    }
+  });
+});
+
+// ── Tanca modal ───────────────────────────────────────────────────────────────
+function closeModal() {
+  backdrop.classList.remove('open');
+  modalGrid.innerHTML = '';
+  currentCam = null;
+}
+document.getElementById('modal-close').addEventListener('click', closeModal);
+backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function fmtTs(iso) {
+  return iso ? iso.replace('T',' ').replace('Z',' UTC') : '';
 }
 </script>
 </body>
@@ -522,7 +658,6 @@ def stream():
 @app.route("/api/alerts")
 def api_alerts():
     """Return list of recent alerts (newest first). ?limit=N to restrict."""
-    from flask import request
     limit = min(int(request.args.get("limit", MAX_ALERTS)), MAX_ALERTS)
     with _lock:
         items = [a.to_dict() for a in reversed(list(_alerts))][:limit]
@@ -537,18 +672,54 @@ def api_latest():
     return jsonify(items)
 
 
-@app.route("/api/image/<int:img_id>")
+@app.route("/api/image/<int:img_id>", methods=["GET", "DELETE"])
 def api_image(img_id: int):
-    """Serve the annotated JPEG for a given alert image id."""
     with _lock:
         alert = _by_id.get(img_id)
     if alert is None:
         abort(404)
+    if request.method == "DELETE":
+        with _lock:
+            _by_id.pop(img_id, None)
+            # Remove from deque
+            try:
+                _alerts.remove(alert)
+            except ValueError:
+                pass
+            # Update _by_camera: if this was the latest, pick next newest
+            if _by_camera.get(alert.camera) is alert:
+                newest = None
+                for a in reversed(list(_alerts)):
+                    if a.camera == alert.camera:
+                        newest = a
+                        break
+                if newest:
+                    _by_camera[alert.camera] = newest
+                else:
+                    _by_camera.pop(alert.camera, None)
+        return ("", 204)
     return send_file(
         io.BytesIO(alert.jpeg),
         mimetype="image/jpeg",
         download_name=f"alert_{img_id}.jpg",
     )
+
+
+@app.route("/api/alerts/camera/<path:prefix>", methods=["GET", "DELETE"])
+def api_camera(prefix: str):
+    if request.method == "DELETE":
+        with _lock:
+            to_remove = [a for a in _alerts if a.camera == prefix]
+            for a in to_remove:
+                _alerts.remove(a)
+                _by_id.pop(a.img_id, None)
+            _by_camera.pop(prefix, None)
+        return ("", 204)
+    # GET – return all alerts for this camera (newest first)
+    with _lock:
+        items = [a.to_dict() for a in reversed(list(_alerts))
+                 if a.camera == prefix]
+    return jsonify(items)
 
 
 _LIVE_HTML = """<!DOCTYPE html>
