@@ -5,11 +5,11 @@
 //   • Captures a JPEG image every 5.5 s and transmits it via MQTT in chunks
 //   • Detects low-light conditions via AGC gain; enables flash LED when dark
 //   • Subscribes to MQTT commands: "start" and "stop"
-//   • Config mode: press BOOT button (GPIO0) within 5 s of power-on →
+//   • Config mode: hold BOOT button (GPIO0) for 3 s at power-on →
 //     AP "CamSec-Config" + web portal at http://192.168.4.1
 //
 // MQTT topics  (prefix configurable, default "cam/01"):
-//   Subscribe : <prefix>/cmd          – "start" | "stop"
+//   Subscribe : <prefix>/cmd          – "start" | "stop" | "flash_on" | "flash_off" | "flash_auto"
 //   Publish   : <prefix>/status       – "online" | "capturing" | "idle" | "offline"
 //   Publish   : <prefix>/image/begin  – JSON: {id, size, chunks, dark}
 //   Publish   : <prefix>/image/data   – Binary: [4B img_id BE][2B chunk_idx BE][data]
@@ -47,12 +47,12 @@
 #define FLASH_LED_PIN      4    // Built-in white flash LED
 #define RED_LED_PIN       33    // Built-in red status LED (active LOW)
 #define CONFIG_BUTTON_PIN  0    // BOOT button (shared with XCLK after cam init)
-#define CONFIG_WINDOW_MS 5000   // ms window at boot to press BOOT for config mode
+#define CONFIG_WINDOW_MS  5000  // ms window at boot to press BOOT for config mode
 
 // ─── Tuning ──────────────────────────────────────────────────────────────────
 #define CAPTURE_INTERVAL_MS   5500  // 5.5 seconds between captures
 #define CHUNK_SIZE            4096  // Bytes per MQTT chunk
-#define LOW_LIGHT_AGC_TH        25  // AGC gain threshold 0-30 (≥ value → dark)
+#define LOW_LIGHT_SIZE_TH   200000  // Probe JPEG bytes above this → dark scene → flash
 #define FLASH_DELAY_MS          80  // ms for flash to illuminate before capture
 #define WIFI_MAX_TRIES          40  // Attempts before giving up (×500 ms each)
 #define MQTT_RECONNECT_MS     5000  // Delay between reconnect attempts
@@ -65,9 +65,11 @@ Preferences  prefs;
 WiFiClient   wifiClient;
 PubSubClient mqtt(wifiClient);
 
-volatile bool capturing  = true;
-uint32_t      imageId    = 0;
-unsigned long lastCapture = 0;
+volatile bool capturing       = true;
+uint32_t      imageId         = 0;
+unsigned long lastCapture     = 0;
+bool          flashOverride   = false;  // true = manual flash control
+bool          flashOverrideOn = false;  // effective value when override active
 
 // Pre-built topic strings (assembled in buildTopics())
 static char topicCmd[96];
@@ -87,7 +89,6 @@ void loadConfig() {
     strlcpy(cfg.mqtt_pass,   prefs.getString("mqtt_pass",   "").c_str(),         sizeof(cfg.mqtt_pass));
     strlcpy(cfg.mqtt_client, prefs.getString("mqtt_client", "esp32cam").c_str(), sizeof(cfg.mqtt_client));
     strlcpy(cfg.mqtt_prefix, prefs.getString("mqtt_prefix", "cam/01").c_str(),   sizeof(cfg.mqtt_prefix));
-    cfg.cam_flip =           prefs.getUChar("cam_flip",    0);
     prefs.end();
 }
 
@@ -101,7 +102,6 @@ void saveConfig() {
     prefs.putString("mqtt_pass",   cfg.mqtt_pass);
     prefs.putString("mqtt_client", cfg.mqtt_client);
     prefs.putString("mqtt_prefix", cfg.mqtt_prefix);
-    prefs.putUChar("cam_flip",    cfg.cam_flip);
     prefs.end();
     Serial.println("[Config] Saved to NVS");
 }
@@ -167,26 +167,27 @@ bool initCamera() {
     return true;
 }
 
-// ─── Light sensor (via AGC register) ─────────────────────────────────────────
+// ─── Light detection (via probe frame JPEG size) ─────────────────────────────
 
-// Returns true if AGC gain is at or above threshold, indicating low light.
-// Call AFTER a throwaway frame so AEC/AGC has settled.
-static bool isLowLight() {
-    sensor_t* s = esp_camera_sensor_get();
-    if (!s) return false;
-    int gain = s->status.agc_gain;  // 0-30
-    Serial.printf("[Light] AGC gain=%d (threshold=%d)\n", gain, LOW_LIGHT_AGC_TH);
-    return gain >= LOW_LIGHT_AGC_TH;
+// OV2640 AEC register readback via SCCB is unreliable for live auto-adjusted
+// values. Instead, we use the probe JPEG file size as a brightness proxy:
+//   • Bright scene → clean image → efficient JPEG → smaller file
+//   • Dark scene   → high gain   → noisy image  → more entropy → larger file
+// Adjust LOW_LIGHT_SIZE_TH based on the probe_size values printed in the log.
+static bool isLowLight(camera_fb_t* probe) {
+    uint32_t sz = probe->len;
+    Serial.printf("[Light] probe_size=%u threshold=%u\n", sz, LOW_LIGHT_SIZE_TH);
+    return sz > LOW_LIGHT_SIZE_TH;
 }
 
 static void setFlash(bool on) {
     digitalWrite(FLASH_LED_PIN, on ? HIGH : LOW);
 }
 
-// ─── LED blink pattern ────────────────────────────────────────────────────────
+// ─── Red status LED ───────────────────────────────────────────────────────────
 // Capturing : 2 blinks every 3 s  (ON·80 ms OFF·200 ms ON·80 ms OFF·2640 ms)
 // Idle      : 1 blink  every 3 s  (ON·80 ms OFF·2920 ms)
-// Called each loop() iteration; LED stays OFF during MQTT reconnect.
+// Called each loop() iteration.
 static void updateLed() {
     unsigned long t = millis() % 3000UL;
     bool on;
@@ -252,6 +253,18 @@ static void mqttCallback(char* topic, byte* payload, unsigned int len) {
             mqtt.publish(topicStatus, "idle", /*retain=*/true);
             Serial.println("[MQTT] Capture STOPPED");
         }
+    } else if (strcmp(msg, "flash_on") == 0) {
+        flashOverride   = true;
+        flashOverrideOn = true;
+        Serial.println("[MQTT] Flash forced ON");
+    } else if (strcmp(msg, "flash_off") == 0) {
+        flashOverride   = true;
+        flashOverrideOn = false;
+        setFlash(false);
+        Serial.println("[MQTT] Flash forced OFF");
+    } else if (strcmp(msg, "flash_auto") == 0) {
+        flashOverride = false;
+        Serial.println("[MQTT] Flash set to AUTO");
     }
 }
 
@@ -285,14 +298,14 @@ static void connectMqtt() {
 
 // ─── Capture and chunk-send ───────────────────────────────────────────────────
 static void captureAndSend() {
-    // --- Step 1: Throwaway frame so AEC/AGC can settle with flash OFF ---
+    // --- Step 1: Probe frame with flash OFF – used as light-level sensor ---
     setFlash(false);
     camera_fb_t* probe = esp_camera_fb_get();
     if (!probe) {
         Serial.println("[Camera] Probe frame failed");
         return;
     }
-    bool dark = isLowLight();
+    bool dark = flashOverride ? flashOverrideOn : isLowLight(probe);
     esp_camera_fb_return(probe);
 
     // --- Step 2: Enable flash if dark, capture real frame ---
@@ -369,35 +382,30 @@ void setup() {
     Serial.begin(115200);
     Serial.println("\n===== CamSec ESP32-CAM =====");
 
-    // Flash LED, red status LED and config button
+    // Flash LED and config button
     pinMode(FLASH_LED_PIN, OUTPUT);
     digitalWrite(FLASH_LED_PIN, LOW);
     pinMode(RED_LED_PIN, OUTPUT);
     digitalWrite(RED_LED_PIN, HIGH);  // OFF (active LOW)
     pinMode(CONFIG_BUTTON_PIN, INPUT_PULLUP);
 
-    // ── Config-mode detection ──────────────────────────────────────────────
-    // Must happen BEFORE camera init because GPIO0 is repurposed as XCLK.
-    // A 5-second window is offered at every boot: press BOOT once to enter
-    // config mode.  The LED blinks slowly during the countdown.
+    // ── Config-mode detection: 5-second window ──────────────────────────────
+    // Must happen BEFORE camera init because GPIO0 is repurposed as XCLK
+    Serial.println("[Boot] Press BOOT within 5 s to enter config mode…");
     bool configMode = false;
-    {
-        Serial.printf("[Boot] Press BOOT within %u s to enter config mode…\n",
-                      CONFIG_WINDOW_MS / 1000);
-        unsigned long t0 = millis();
-        while (millis() - t0 < CONFIG_WINDOW_MS) {
-            // Slow blink on red LED: ON 100 ms every 500 ms (active LOW)
-            unsigned long phase = (millis() - t0) % 500;
-            digitalWrite(RED_LED_PIN, phase < 100 ? LOW : HIGH);
-            if (digitalRead(CONFIG_BUTTON_PIN) == LOW) {
-                configMode = true;
-                break;
-            }
-            delay(10);
+    unsigned long windowEnd = millis() + CONFIG_WINDOW_MS;
+
+    while (millis() < windowEnd) {
+        // Fast blink red LED during window (active LOW)
+        digitalWrite(RED_LED_PIN, ((millis() / 150) & 1) ? LOW : HIGH);
+        if (digitalRead(CONFIG_BUTTON_PIN) == LOW) {
+            configMode = true;
+            Serial.println("[Boot] BOOT pressed – entering config mode");
+            break;
         }
-        digitalWrite(RED_LED_PIN, HIGH);  // OFF
-        if (!configMode) Serial.println("[Boot] Window expired – normal start");
+        delay(10);
     }
+    digitalWrite(RED_LED_PIN, HIGH);  // OFF
 
     // ── Load stored config ────────────────────────────────────────────────
     loadConfig();
@@ -415,16 +423,6 @@ void setup() {
         Serial.println("[Boot] Camera init failed – rebooting in 3 s");
         delay(3000);
         ESP.restart();
-    }
-
-    // Apply 180° rotation if camera is mounted upside-down
-    if (cfg.cam_flip) {
-        sensor_t* s = esp_camera_sensor_get();
-        if (s) {
-            s->set_vflip(s, 1);
-            s->set_hmirror(s, 1);
-            Serial.println("[Camera] Rotation 180° applied (cap per avall)");
-        }
     }
 
     connectWifi();
@@ -454,7 +452,6 @@ void loop() {
 
     // Reconnect MQTT if dropped
     if (!mqtt.connected()) {
-        digitalWrite(RED_LED_PIN, HIGH);  // OFF while reconnecting
         Serial.println("[MQTT] Connection lost – reconnecting…");
         connectMqtt();
     }
