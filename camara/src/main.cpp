@@ -89,6 +89,7 @@ void loadConfig() {
     strlcpy(cfg.mqtt_pass,   prefs.getString("mqtt_pass",   "").c_str(),         sizeof(cfg.mqtt_pass));
     strlcpy(cfg.mqtt_client, prefs.getString("mqtt_client", "esp32cam").c_str(), sizeof(cfg.mqtt_client));
     strlcpy(cfg.mqtt_prefix, prefs.getString("mqtt_prefix", "cam/01").c_str(),   sizeof(cfg.mqtt_prefix));
+    cfg.cam_flip =           prefs.getUChar("cam_flip",    0);
     prefs.end();
 }
 
@@ -102,6 +103,7 @@ void saveConfig() {
     prefs.putString("mqtt_pass",   cfg.mqtt_pass);
     prefs.putString("mqtt_client", cfg.mqtt_client);
     prefs.putString("mqtt_prefix", cfg.mqtt_prefix);
+    prefs.putUChar("cam_flip",    cfg.cam_flip);
     prefs.end();
     Serial.println("[Config] Saved to NVS");
 }
@@ -159,6 +161,11 @@ bool initCamera() {
         s->set_exposure_ctrl(s, 1);
         s->set_aec2(s, 1);         // Enable AEC DSP
         s->set_aec_value(s, 300);  // Mid-range starting exposure
+
+        // Apply 180° rotation if configured (flip both axes)
+        int flip = cfg.cam_flip ? 1 : 0;
+        s->set_vflip(s, flip);
+        s->set_hmirror(s, flip);
     }
 
     Serial.printf("[Camera] OK  resolution=%s  PSRAM=%s\n",
