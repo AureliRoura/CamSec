@@ -401,6 +401,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   color:#fca5a5;font-size:.85em;cursor:pointer;padding:.18em .4em;
   display:none;line-height:1}
 .hi:hover .hi-del{display:block}
+/* Lightbox */
+#lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);
+  z-index:400;align-items:center;justify-content:center;flex-direction:column;
+  gap:.6em;cursor:zoom-out}
+#lightbox.open{display:flex}
+#lightbox img{max-width:95vw;max-height:88vh;border-radius:6px;
+  box-shadow:0 0 40px rgba(0,0,0,.8);object-fit:contain}
+#lightbox .lb-info{color:#8b949e;font-size:.8em;text-align:center}
 nav a{color:#58a6ff;font-size:.85em;text-decoration:none}
 nav a:hover{text-decoration:underline}
 </style>
@@ -436,6 +444,12 @@ nav a:hover{text-decoration:underline}
     </div>
     <div id="modal-grid"></div>
   </div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <img id="lb-img" src="" alt="">
+  <div class="lb-info" id="lb-info"></div>
 </div>
 
 <script>
@@ -515,13 +529,18 @@ function makeHistItem(a) {
   const div = document.createElement('div');
   div.className = 'hi';
   div.innerHTML = `
-    <img src="${a.url}" loading="lazy" alt="${a.img_id}">
+    <img src="${a.url}" loading="lazy" alt="${a.img_id}" style="cursor:zoom-in">
     <button class="hi-del" title="Elimina">&#128465;</button>
     <div class="hi-info">
       ${a.dark ? '<span class="tag dark">&#127769;</span> ' : ''}
-      <span class="tag person">&#128100; ${a.persons}</span><br>
+      <span class="tag person">&#128100; ${a.persons}</span>
+      <span style="float:right;opacity:.5">#${a.img_id}</span><br>
       ${fmtTs(a.ts_iso)}
     </div>`;
+  div.querySelector('img').addEventListener('click', e => {
+    e.stopPropagation();
+    openLightbox(a.url, a.img_id, a.ts_iso, a.persons);
+  });
   div.querySelector('.hi-del').addEventListener('click', e => {
     e.stopPropagation();
     fetch('/api/image/' + a.img_id, {method:'DELETE'}).then(r => {
@@ -549,6 +568,24 @@ btnDelAll.addEventListener('click', () => {
       closeModal();
     }
   });
+});
+
+// ── Lightbox ───────────────────────────────────────────────────────────────
+const lightbox = document.getElementById('lightbox');
+const lbImg    = document.getElementById('lb-img');
+const lbInfo   = document.getElementById('lb-info');
+
+function openLightbox(url, imgId, tsIso, persons) {
+  lbImg.src = url;
+  lbInfo.textContent = '#' + imgId + '  •  ' + fmtTs(tsIso) + '  •  👤 ' + persons;
+  lightbox.classList.add('open');
+}
+lightbox.addEventListener('click', () => {
+  lightbox.classList.remove('open');
+  lbImg.src = '';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') lightbox.classList.remove('open');
 });
 
 // ── Tanca modal ───────────────────────────────────────────────────────────────
@@ -970,12 +1007,12 @@ HELP_HTML = """<!DOCTYPE html>
       <tr>
         <td><span class="badge get">GET</span></td>
         <td><span class="mono">/api/alerts/camera/&lt;prefix&gt;</span></td>
-        <td>Historial complet d'una càmera (des de disc)</td>
+        <td>Historial complet d'una càmera (memòria RAM)</td>
       </tr>
       <tr>
         <td><span class="badge delete">DELETE</span></td>
         <td><span class="mono">/api/alerts/camera/&lt;prefix&gt;</span></td>
-        <td>Elimina totes les fotos d'una càmera (RAM + disc)</td>
+        <td>Elimina totes les fotos d'una càmera de la memòria</td>
       </tr>
       <tr>
         <td><span class="badge get">GET</span></td>
@@ -985,7 +1022,7 @@ HELP_HTML = """<!DOCTYPE html>
       <tr>
         <td><span class="badge delete">DELETE</span></td>
         <td><span class="mono">/api/image/&lt;id&gt;</span></td>
-        <td>Elimina una foto concreta (RAM + disc)</td>
+        <td>Elimina una foto concreta de la memòria</td>
       </tr>
       <tr>
         <td><span class="badge get">GET</span></td>
