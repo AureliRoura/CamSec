@@ -6,13 +6,24 @@ Lightweight HTTP server that subscribes to MQTT alert topics, reassembles
 annotated JPEG images and serves them via a real-time web dashboard.
 
 Endpoints:
-  GET /                   – Dashboard (auto-updating, iframe-embeddable)
-  GET /embed              – Minimal panel for embedding in an existing page
-  GET /stream             – Server-Sent Events stream (real-time alerts)
-  GET /api/alerts         – JSON list of recent alerts (all cameras)
-  GET /api/alerts/latest  – JSON: one latest alert per camera
-  GET /api/image/<img_id> – Serve annotated JPEG by id
-  GET /help               – This help: available endpoints and config variables
+  GET /                          – Dashboard (real-time alerts, one card per camera)
+  GET /embed                     – Minimal panel for embedding in an existing page
+  GET /stream                    – Server-Sent Events stream (real-time alerts)
+  GET /live                      – Live view (all raw camera frames)
+  GET /live/stream               – SSE stream of raw camera frames
+  GET /api/alerts                – JSON list of recent alerts (all cameras)
+  GET /api/alerts/latest         – JSON: one latest alert per camera
+  GET /api/alerts/camera/<pfx>   – Full alert history for a camera (disk if enabled)
+  DEL /api/alerts/camera/<pfx>   – Delete all alerts for a camera
+  GET /api/image/<img_id>        – Serve annotated JPEG by id (memory or disk)
+  DEL /api/image/<img_id>        – Delete an alert image
+  GET /api/live/latest           – JSON: latest raw frame per camera
+  GET /api/live/image/<prefix>   – Serve latest raw JPEG for a camera
+  GET /help                      – Help page: endpoints and config variables
+
+Disk persistence (optional):
+  Set PERSIST_DIR to enable saving alert images to disk across restarts.
+  Configure retention via MAX_DISK_ALERTS and MAX_DISK_DAYS.
 """
 
 import base64
@@ -42,6 +53,9 @@ MAX_ALERTS   = int(os.getenv("MAX_ALERTS",   "50"))   # alerts kept in memory
 HTTP_HOST    = os.getenv("HTTP_HOST",    "0.0.0.0")
 HTTP_PORT    = int(os.getenv("HTTP_PORT",    "8080"))
 LOG_LEVEL    = os.getenv("LOG_LEVEL",    "INFO")
+PERSIST_DIR     = os.getenv("PERSIST_DIR",     "")        # empty = disabled
+MAX_DISK_ALERTS = int(os.getenv("MAX_DISK_ALERTS", "500"))
+MAX_DISK_DAYS   = int(os.getenv("MAX_DISK_DAYS",   "7"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -117,6 +131,158 @@ def _store_live(prefix: str, jpeg: bytes):
             _live_sse_queues.remove(q)
 
 
+# ─── Disk persistence ─────────────────────────────────────────────────────────────
+# All disk I/O is serialised via _disk_lock.  Functions ending in "_locked"
+# must be called while the caller already holds that lock.
+
+_disk_lock       = threading.Lock()
+_disk_save_count = 0
+
+
+def _images_dir() -> str:
+    return os.path.join(PERSIST_DIR, "images")
+
+
+def _index_path() -> str:
+    return os.path.join(PERSIST_DIR, "index.jsonl")
+
+
+def _disk_read_index() -> list:
+    """Read all valid entries from index.jsonl.  Caller must hold _disk_lock."""
+    if not os.path.exists(_index_path()):
+        return []
+    entries: list = []
+    with open(_index_path(), encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+    return entries
+
+
+def _disk_rewrite_index(entries: list):
+    """Overwrite index.jsonl with entries.  Caller must hold _disk_lock."""
+    with open(_index_path(), "w", encoding="utf-8") as f:
+        for m in entries:
+            f.write(json.dumps(m) + "\n")
+
+
+def _disk_prune_locked():
+    """Remove excess / stale images.  Caller must hold _disk_lock."""
+    entries   = _disk_read_index()
+    cutoff    = time.time() - MAX_DISK_DAYS * 86400
+    to_del    = {m["img_id"] for m in entries if m.get("ts", 0) < cutoff}
+    remaining = [m for m in entries if m["img_id"] not in to_del]
+    remaining.sort(key=lambda m: m.get("ts", 0))
+    while len(remaining) > MAX_DISK_ALERTS:
+        to_del.add(remaining.pop(0)["img_id"])
+    if not to_del:
+        return
+    for img_id in to_del:
+        try:
+            os.remove(os.path.join(_images_dir(), f"{img_id}.jpg"))
+        except OSError:
+            pass
+    _disk_rewrite_index([m for m in entries if m["img_id"] not in to_del])
+    log.info("Disk prune: removed %d old alert(s)", len(to_del))
+
+
+def _disk_save(alert: Alert):
+    """Persist alert image + metadata to disk.  Caller must hold _disk_lock."""
+    global _disk_save_count
+    os.makedirs(_images_dir(), exist_ok=True)
+    with open(os.path.join(_images_dir(), f"{alert.img_id}.jpg"), "wb") as f:
+        f.write(alert.jpeg)
+    meta = {
+        "img_id":  alert.img_id,
+        "camera":  alert.camera,
+        "ts_iso":  alert.ts_iso,
+        "ts":      alert.ts,
+        "persons": alert.persons,
+        "dark":    alert.dark,
+    }
+    with open(_index_path(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(meta) + "\n")
+    _disk_save_count += 1
+    if _disk_save_count % 10 == 0:
+        _disk_prune_locked()
+
+
+def _disk_delete_id(img_id: int):
+    """Remove one alert image + index entry from disk."""
+    with _disk_lock:
+        try:
+            os.remove(os.path.join(_images_dir(), f"{img_id}.jpg"))
+        except OSError:
+            pass
+        entries = _disk_read_index()
+        _disk_rewrite_index([m for m in entries if m.get("img_id") != img_id])
+
+
+def _disk_delete_camera(camera: str):
+    """Remove all alerts for a camera from disk."""
+    with _disk_lock:
+        entries = _disk_read_index()
+        to_del  = {m["img_id"] for m in entries if m.get("camera") == camera}
+        for img_id in to_del:
+            try:
+                os.remove(os.path.join(_images_dir(), f"{img_id}.jpg"))
+            except OSError:
+                pass
+        _disk_rewrite_index([m for m in entries if m.get("camera") != camera])
+
+
+def _disk_query_camera(prefix: str) -> list:
+    """Return metadata dicts for all alerts of a camera, newest first."""
+    with _disk_lock:
+        entries = _disk_read_index()
+    items = [
+        {**m, "url": f"/api/image/{m['img_id']}"}
+        for m in entries if m.get("camera") == prefix
+    ]
+    items.sort(key=lambda m: m.get("ts", 0), reverse=True)
+    return items
+
+
+def _disk_load():
+    """Restore the most recent MAX_ALERTS alerts from disk into memory."""
+    if not PERSIST_DIR or not os.path.exists(_index_path()):
+        return
+    with _disk_lock:
+        _disk_prune_locked()
+        entries = _disk_read_index()
+    entries.sort(key=lambda m: m.get("ts", 0))
+    for m in entries[-MAX_ALERTS:]:
+        img_path = os.path.join(_images_dir(), f"{m['img_id']}.jpg")
+        if not os.path.exists(img_path):
+            continue
+        try:
+            with open(img_path, "rb") as f:
+                jpeg = f.read()
+        except OSError:
+            log.warning("Cannot read %s", img_path)
+            continue
+        alert = Alert(
+            img_id=int(m["img_id"]),
+            camera=m.get("camera", "unknown"),
+            ts_iso=m.get("ts_iso", ""),
+            ts=float(m.get("ts", 0)),
+            persons=int(m.get("persons", 0)),
+            dark=bool(m.get("dark", False)),
+            jpeg=jpeg,
+        )
+        with _lock:
+            _alerts.append(alert)
+            _by_camera[alert.camera] = alert
+            _by_id[alert.img_id] = alert
+    log.info("Disk load: restored alerts from %s (%d total on disk)",
+             PERSIST_DIR, len(entries))
+
+
 def _store_alert(alert: Alert):
     with _lock:
         _alerts.append(alert)
@@ -128,6 +294,13 @@ def _store_alert(alert: Alert):
             _by_id.clear()
             for a in _alerts:
                 _by_id[a.img_id] = a
+    # Persist to disk
+    if PERSIST_DIR:
+        try:
+            with _disk_lock:
+                _disk_save(alert)
+        except Exception:
+            log.exception("Disk save failed for alert #%d", alert.img_id)
     # Notify SSE subscribers
     event = "data: " + json.dumps(alert.to_dict()) + "\n\n"
     with _sse_lock:
@@ -714,6 +887,15 @@ def api_image(img_id: int):
     with _lock:
         alert = _by_id.get(img_id)
     if alert is None:
+        # Fallback: check disk
+        if PERSIST_DIR:
+            img_path = os.path.join(_images_dir(), f"{img_id}.jpg")
+            if os.path.exists(img_path):
+                if request.method == "DELETE":
+                    _disk_delete_id(img_id)
+                    return ("", 204)
+                return send_file(img_path, mimetype="image/jpeg",
+                                 download_name=f"alert_{img_id}.jpg")
         abort(404)
     if request.method == "DELETE":
         with _lock:
@@ -734,6 +916,8 @@ def api_image(img_id: int):
                     _by_camera[alert.camera] = newest
                 else:
                     _by_camera.pop(alert.camera, None)
+        if PERSIST_DIR:
+            _disk_delete_id(img_id)
         return ("", 204)
     return send_file(
         io.BytesIO(alert.jpeg),
@@ -751,8 +935,12 @@ def api_camera(prefix: str):
                 _alerts.remove(a)
                 _by_id.pop(a.img_id, None)
             _by_camera.pop(prefix, None)
+        if PERSIST_DIR:
+            _disk_delete_camera(prefix)
         return ("", 204)
-    # GET – return all alerts for this camera (newest first)
+    # GET – return full history from disk if available, else from memory
+    if PERSIST_DIR and os.path.exists(_index_path()):
+        return jsonify(_disk_query_camera(prefix))
     with _lock:
         items = [a.to_dict() for a in reversed(list(_alerts))
                  if a.camera == prefix]
@@ -1045,6 +1233,9 @@ HELP_HTML = """<!DOCTYPE html>
       <tr><td class="mono">MQTT_CLIENT</td> <td class="default">camsec-viewer</td><td>Client ID MQTT</td></tr>
       <tr><td class="mono">CHUNK_SIZE</td>  <td class="default">4096</td>         <td>Mida del chunk en bytes (ha de coincidir amb la càmera)</td></tr>
       <tr><td class="mono">MAX_ALERTS</td>  <td class="default">50</td>           <td>Màxim d'alertes conservades en memòria RAM</td></tr>
+      <tr><td class="mono">PERSIST_DIR</td>     <td class="default">/data/alerts</td> <td>Directori on es desen les imatges d'alerta (buit = desactivat)</td></tr>
+      <tr><td class="mono">MAX_DISK_ALERTS</td> <td class="default">500</td>          <td>Màxim d'imatges a conservar al disc</td></tr>
+      <tr><td class="mono">MAX_DISK_DAYS</td>   <td class="default">7</td>            <td>Dies màxim de retenció d'imatges al disc</td></tr>
       <tr><td class="mono">HTTP_HOST</td>   <td class="default">0.0.0.0</td>      <td>Adreça d'escolta del servidor HTTP</td></tr>
       <tr><td class="mono">HTTP_PORT</td>   <td class="default">8080</td>         <td>Port d'escolta del servidor HTTP</td></tr>
       <tr><td class="mono">LOG_LEVEL</td>   <td class="default">INFO</td>         <td>Nivell de log: DEBUG · INFO · WARNING · ERROR</td></tr>
@@ -1066,6 +1257,8 @@ def help_endpoint():
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Restore persisted alerts from disk before accepting connections
+    _disk_load()
     # Start MQTT listener in a background daemon thread
     t = threading.Thread(target=_start_mqtt, daemon=True, name="mqtt")
     t.start()

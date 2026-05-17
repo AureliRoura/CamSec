@@ -99,6 +99,39 @@ automàticament al contenidor.
 | `STALE_TTL_S` | `60` | Descarta buffers d'imatge incomplets passats N segons |
 | `LOG_LEVEL` | `INFO` | Nivell de log: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `MAX_ALERTS` | `50` | Màxim d'alertes en memòria RAM al viewer |
+| `PERSIST_DIR` | `/data/alerts` | Ruta dins del contenidor on es desen les imatges d'alerta (buit = desactivat) |
+| `MAX_DISK_ALERTS` | `500` | Número màxim d'imatges a conservar al disc |
+| `MAX_DISK_DAYS` | `7` | Dies màxim de retenció d'imatges al disc |
+
+Per canviar qualsevol paràmetre edita `.env` i reinicia:
+
+```bash
+docker compose up -d
+```
+
+---
+
+## Persistència d'alertes al disc
+
+El viewer desa cada imatge d'alerta al disc i recupera l'historial complet en reiniciar
+el contenidor. La persistència es desactiva si `PERSIST_DIR` és buit.
+
+### Estructura de fitxers
+
+```
+$PERSIST_DIR/   (= /data/alerts dins el contenidor)
+├── index.jsonl          # metadades de cada alerta (una línia JSON per entrada)
+└── images/
+    ├── 1.jpg
+    ├── 2.jpg
+    └── …
+```
+
+### Retenció automàtica
+
+Cada 10 alertes el viewer neteja les imatges antigues:
+- Elimina imatges de més de **`MAX_DISK_DAYS`** dies (per defecte 7).
+- Conserva com a màxim **`MAX_DISK_ALERTS`** imatges (per defecte 500).
 
 ---
 
@@ -108,7 +141,7 @@ Accedeix a **http://\<ip-servidor\>:8088**
 
 - **Vista principal** (`/`) — una targeta per càmera amb la darrera foto detectada (alertes amb detecció de persona).
 - **Directe** (`/live`) — última imatge rebuda de cada càmera en temps real, sense filtrar per detecció.
-- **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (memòria RAM); clica una foto per veure-la a pantalla completa (lightbox); mostra l'ID de cada foto.
+- **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (des del disc si la persistència és activa, altrament memòria RAM); clica una foto per veure-la a pantalla completa (lightbox); mostra l'ID de cada foto.
 - **Eliminar fotos** — botó 🗑️ a cada foto de l'historial per eliminar-la individualment; botó **Elimina totes** a la capçalera del modal per buidar tota la càmera.
 - **Temps real** — s'actualitza automàticament via Server-Sent Events (SSE) sense cal recarregar la pàgina.
 - **Embed** — panel mínim per incloure via `<iframe src="http://servidor:8088/embed">`.
@@ -119,10 +152,10 @@ Accedeix a **http://\<ip-servidor\>:8088**
 |---|---|---|
 | `GET` | `/api/alerts` | Llista d'alertes recents en memòria (JSON) |
 | `GET` | `/api/alerts/latest` | Darrera alerta per càmera (JSON) |
-| `GET` | `/api/alerts/camera/<prefix>` | Historial complet d'una càmera (memòria RAM) |
-| `DELETE` | `/api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera de la memòria |
+| `GET` | `/api/alerts/camera/<prefix>` | Historial complet d'una càmera (des del disc si la persistència és activa) |
+| `DELETE` | `/api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera (memòria i disc) |
 | `GET` | `/api/image/<id>` | Serveix el JPEG d'una alerta concreta |
-| `DELETE` | `/api/image/<id>` | Elimina una foto concreta de la memòria |
+| `DELETE` | `/api/image/<id>` | Elimina una foto concreta (memòria i disc) |
 | `GET` | `/stream` | Server-Sent Events en temps real |
 | `GET` | `/embed` | Panel mínim per `<iframe>` |
 | `GET` | `/live` | Vista en directe de totes les càmeres (totes les imatges) |
@@ -283,6 +316,25 @@ All variables are set in the `.env` file. `docker-compose.yml` passes them autom
 | `STALE_TTL_S` | `60` | Discard incomplete image buffers after N seconds |
 | `LOG_LEVEL` | `INFO` | Log level: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `MAX_ALERTS` | `50` | Maximum alerts kept in RAM by the viewer |
+| `PERSIST_DIR` | `/data/alerts` | Path inside the container to store alert images (empty = disabled) |
+| `MAX_DISK_ALERTS` | `500` | Maximum number of alert images to keep on disk |
+| `MAX_DISK_DAYS` | `7` | Maximum age of alert images in days |
+
+## Alert persistence
+
+The viewer saves each alert image to disk and restores the full history on container
+restart. Persistence is disabled when `PERSIST_DIR` is empty.
+
+```
+$PERSIST_DIR/   (= /data/alerts inside the container)
+├── index.jsonl          # one JSON line per alert (metadata)
+└── images/
+    ├── 1.jpg
+    └── …
+```
+
+Every 10 alerts the viewer prunes old images: removes files older than `MAX_DISK_DAYS`
+days and keeps at most `MAX_DISK_ALERTS` images.
 
 ## Dashboard & REST API
 
@@ -292,10 +344,10 @@ Access at **http://\<server-ip\>:8088**
 |---|---|---|
 | `GET` | `/api/alerts` | Recent alerts in memory (JSON) |
 | `GET` | `/api/alerts/latest` | Latest alert per camera (JSON) |
-| `GET` | `/api/alerts/camera/<prefix>` | Full camera history (RAM) |
-| `DELETE` | `/api/alerts/camera/<prefix>` | Delete all photos for a camera (RAM) |
+| `GET` | `/api/alerts/camera/<prefix>` | Full camera history (disk if persistence is active) |
+| `DELETE` | `/api/alerts/camera/<prefix>` | Delete all photos for a camera (RAM + disk) |
 | `GET` | `/api/image/<id>` | Serve a JPEG alert image |
-| `DELETE` | `/api/image/<id>` | Delete a specific photo (RAM) |
+| `DELETE` | `/api/image/<id>` | Delete a specific photo (RAM + disk) |
 | `GET` | `/stream` | Server-Sent Events real-time stream |
 | `GET` | `/embed` | Minimal panel for `<iframe>` embedding |
 | `GET` | `/live` | Live view of all cameras (all frames, not just alerts) |
