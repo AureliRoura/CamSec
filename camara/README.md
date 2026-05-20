@@ -145,7 +145,8 @@ Substitueix `cam/01` pel prefix configurat.
 
 | Topic | Direcció | Format | Descripció |
 |---|---|---|---|
-| `cam/01/cmd` | Subscripció | text | `start` · `stop` · `flash_on` · `flash_off` · `flash_auto` |
+| `cam/01/cmd` | Subscripció | text / JSON | `start` · `stop` · `{"flash":"on|off|auto"}` · `{"interval":<ms>}` |
+| `cam/01/ack` | Publicació | JSON | `{"ok":true,"cmd":"start"}` · `{"ok":false,"error":"..."}` |
 | `cam/01/status` | Publicació | text | `online` · `capturing` · `idle` · `offline` |
 | `cam/01/image/begin` | Publicació | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
 | `cam/01/image/data` | Publicació | binari | `[4B id BE][2B chunk_idx BE][dades JPEG]` |
@@ -157,11 +158,15 @@ Substitueix `cam/01` pel prefix configurat.
 |---|---|
 | `start` | Inicia les captures periòdiques |
 | `stop` | Atura les captures; apaga el flaix |
-| `flash_on` | Força el flaix **sempre encès** en cada captura |
-| `flash_off` | Força el flaix **sempre apagat** (ignora la detecció de llum) |
-| `flash_auto` | Restaura la detecció automàtica de poca llum (mode per defecte) |
+| `{"flash":"on"}` | Força el flaix **sempre encès** en cada captura |
+| `{"flash":"off"}` | Força el flaix **sempre apagat** (ignora la detecció de llum) |
+| `{"flash":"auto"}` | Restaura la detecció automàtica de poca llum (mode per defecte) |
+| `{"interval":<ms>}` | Canvia l'interval entre captures en temps real (p. ex. `{"interval":10000}`) |
 
-> `flash_on`/`flash_off` persisteixen fins que s'envia `flash_auto` o es reinicia la placa.
+El valor de `flash` és insensible a majúscules/minúscules (`"ON"`, `"Off"` i `"on"` són equivalents).
+
+> Els canvis de `flash` persisteixen fins que s'envia `{"flash":"auto"}` o es reinicia la placa.
+> `{"interval":<ms>}` pren efecte immediatament però no es guarda a NVS; usa el portal web per fer-ho persistent.
 
 ### Reconstrucció d'imatge (exemple Python)
 
@@ -290,7 +295,8 @@ Replace `cam/01` with the prefix you configured.
 
 | Topic | Direction | Format | Description |
 |---|---|---|---|
-| `cam/01/cmd` | Subscribe | text | `start` · `stop` · `flash_on` · `flash_off` · `flash_auto` |
+| `cam/01/cmd` | Subscribe | text / JSON | `start` · `stop` · `{"flash":"on|off|auto"}` · `{"interval":<ms>}` |
+| `cam/01/ack` | Publish | JSON | `{"ok":true,"cmd":"start"}` · `{"ok":false,"error":"..."}` |
 | `cam/01/status` | Publish | text | `online` · `capturing` · `idle` · `offline` |
 | `cam/01/image/begin` | Publish | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
 | `cam/01/image/data` | Publish | binary | `[4B id BE][2B chunk_idx BE][JPEG data]` |
@@ -302,11 +308,15 @@ Replace `cam/01` with the prefix you configured.
 |---|---|
 | `start` | Start periodic captures |
 | `stop` | Stop captures; turn off flash |
-| `flash_on` | Force flash **always on** for every capture |
-| `flash_off` | Force flash **always off** (ignore low-light detection) |
-| `flash_auto` | Restore automatic low-light detection (default) |
+| `{"flash":"on"}` | Force flash **always on** for every capture |
+| `{"flash":"off"}` | Force flash **always off** (ignore low-light detection) |
+| `{"flash":"auto"}` | Restore automatic low-light detection (default) |
+| `{"interval":<ms>}` | Change the capture interval at runtime (e.g. `{"interval":10000}`) |
 
-> `flash_on`/`flash_off` persist until `flash_auto` is sent or the board is rebooted.
+The `flash` value is case-insensitive (`"ON"`, `"Off"` and `"on"` are all accepted).
+
+> Flash overrides persist until `{"flash":"auto"}` is sent or the board is rebooted.
+> `{"interval":<ms>}` takes effect immediately but is not saved to NVS; use the web portal for a persistent change.
 
 ## Adjustable parameters (`main.cpp`)
 

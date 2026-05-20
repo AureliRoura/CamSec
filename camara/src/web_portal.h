@@ -102,6 +102,9 @@ function togglePw(btn){
     <p class="hint">Exemple: <code>cam/01</code> &rarr; topics: <code>cam/01/status</code>, <code>cam/01/image/data</code>, etc.</p>
 
     <h2>&#128247; C&agrave;mera</h2>
+    <label>Interval entre captures (ms)</label>
+    <input type="number" name="capture_interval_ms" min="1000" max="3600000" value="{INTERVAL}" required>
+    <p class="hint">Temps entre captures en mil&middot;lisegons (p. ex. <code>5500</code> = 5,5 s).</p>
     <label>Orientaci&oacute; de la c&agrave;mera</label>
     <select name="cam_flip" style="width:100%;padding:.5em .7em;border:1px solid #bbb;border-radius:5px;font-size:.95em">
       <option value="0" {SEL_NORMAL}>Normal (cap amunt)</option>
@@ -161,6 +164,7 @@ static String _buildPage(const AppConfig& cfg) {
     html.replace("{PREFIX}",     String(cfg.mqtt_prefix));
     html.replace("{SEL_NORMAL}", cfg.cam_flip == 0 ? "selected" : "");
     html.replace("{SEL_FLIP}",   cfg.cam_flip == 1 ? "selected" : "");
+    html.replace("{INTERVAL}",   String(cfg.capture_interval_ms));
     return html;
 }
 
@@ -201,6 +205,11 @@ static void _handleSave() {
 
     if (_portalServer.hasArg("cam_flip"))
         cfg.cam_flip = (_portalServer.arg("cam_flip") == "1") ? 1 : 0;
+
+    if (_portalServer.hasArg("capture_interval_ms")) {
+        long v = _portalServer.arg("capture_interval_ms").toInt();
+        if (v >= 1000 && v <= 3600000) cfg.capture_interval_ms = (uint32_t)v;
+    }
 
     // Persist to NVS
     _pSaveFn();

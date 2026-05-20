@@ -227,6 +227,7 @@ La primera vegada (o si canvies la xarxa), cal configurar la càmera via el port
    | MQTT User / Pass | Buit si el broker no requereix autenticació |
    | MQTT Client ID | Identificador únic per a aquesta càmera (p. ex. `cam-sala`) |
    | MQTT Prefix | Prefix dels topics (p. ex. `cam/01`) |
+   | Interval entre captures | Temps en ms entre captures (per defecte `5500` = 5,5 s) |
    | Orientació de la càmera | **Normal** (cap amunt) o **Cap per avall** (rotació 180°) |
 
 7. Clica **Guardar i reiniciar**. La càmera es connectarà a la xarxa i començarà a capturar.
@@ -271,7 +272,8 @@ Captura JPEG (5.5 s)
 | `<prefix>/image/begin` | càmera → broker | JSON: `{id, size, chunks, dark}` |
 | `<prefix>/image/data`  | càmera → broker | Binari: `[4B id][2B idx][dades JPEG]` |
 | `<prefix>/image/end`   | càmera → broker | JSON: `{id, chunks, ok}` |
-| `<prefix>/cmd`         | broker → càmera | `"start"` \| `"stop"` |
+| `<prefix>/cmd`         | broker → càmera | `"start"` \| `"stop"` \| `{"flash":"on\|off\|auto"}` \| `{"interval":<ms>}` |
+| `<prefix>/ack`         | càmera → broker | JSON: `{ok, cmd\|flash\|interval[, error]}` |
 | `<prefix>/status`      | càmera → broker | `"online"` \| `"capturing"` \| `"idle"` \| `"offline"` |
 | `<prefix>/alert`       | detector → broker | JSON resum de detecció |
 | `<prefix>/alert/image/*` | detector → broker | JPEG anotat amb bounding boxes |
@@ -284,7 +286,7 @@ Captura JPEG (5.5 s)
 | Finestra de configuració (5 s al boot) | Blink ràpid (100 ms ON / 500 ms OFF) |
 | Mode configuració actiu (portal AP) | Blink lent (50 ms ON / 2 s OFF) |
 | Capturant imatges | 2 parpellejos ràpids cada 3 s |
-| Presa de fotos aturada (`stop`) | 1 parpelleig cada 3 s |
+| Presa de fotos aturada (`stop`) | 1 parpelleig cada 10 s |
 | Reconnectant MQTT | Apagat |
 | Flash per captura nocturna | LED blanc (GPIO4), temporalment |
 
@@ -480,7 +482,7 @@ sudo systemctl enable --now mosquitto
 1. Power the camera. During the first **5 seconds** the red LED blinks fast.
 2. Press **BOOT (GPIO0)** while the LED blinks → enters configuration mode.
 3. Connect to Wi-Fi **`CamSec-Config`** (password: `camsec123`).
-4. Open **http://192.168.4.1** and fill in the form (Wi-Fi, MQTT broker IP, credentials, prefix, orientation).
+4. Open **http://192.168.4.1** and fill in the form (Wi-Fi, MQTT broker IP, credentials, prefix, capture interval, orientation).
 5. Click **Save & Restart**.
 
 ## Web dashboard
@@ -523,7 +525,8 @@ python cam_viewer.py
 | `<prefix>/image/begin` | camera → broker | JSON: `{id, size, chunks, dark}` |
 | `<prefix>/image/data`  | camera → broker | Binary: `[4B id][2B idx][JPEG data]` |
 | `<prefix>/image/end`   | camera → broker | JSON: `{id, chunks, ok}` |
-| `<prefix>/cmd`         | broker → camera | `"start"` \| `"stop"` |
+| `<prefix>/cmd`         | broker → camera | `"start"` \| `"stop"` \| `{"flash":"on\|off\|auto"}` \| `{"interval":<ms>}` |
+| `<prefix>/ack`         | camera → broker | JSON: `{ok, cmd\|flash\|interval[, error]}` |
 | `<prefix>/status`      | camera → broker | `"online"` \| `"capturing"` \| `"idle"` \| `"offline"` |
 | `<prefix>/alert`       | detector → broker | Detection summary JSON |
 | `<prefix>/alert/image/*` | detector → broker | Annotated JPEG with bounding boxes |
@@ -535,7 +538,7 @@ python cam_viewer.py
 | Configuration window (5 s at boot) | Fast blink (100 ms ON / 500 ms OFF) |
 | Configuration mode active (AP portal) | Slow blink (50 ms ON / 2 s OFF) |
 | Capturing images | 2 quick flashes every 3 s |
-| Capture stopped (`stop`) | 1 flash every 3 s |
+| Capture stopped (`stop`) | 1 flash every 10 s |
 | Reconnecting MQTT | Off |
 | Night capture flash | White LED (GPIO4), momentarily |
 

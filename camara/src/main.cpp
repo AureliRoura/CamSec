@@ -9,7 +9,10 @@
 //     AP "CamSec-Config" + web portal at http://192.168.4.1
 //
 // MQTT topics  (prefix configurable, default "cam/01"):
-//   Subscribe : <prefix>/cmd          – "start" | "stop" | "flash_on" | "flash_off" | "flash_auto"
+//   Subscribe : <prefix>/cmd          – "start" | "stop"
+//                                      | {"flash":"on"|"off"|"auto"}  (valor insensible a majúscules)
+//                                      | {"interval":<ms>}             (1000–3 600 000 ms)
+//   Publish   : <prefix>/ack           – JSON: {ok, cmd|flash|interval[, error]}
 //   Publish   : <prefix>/status       – "online" | "capturing" | "idle" | "offline"
 //   Publish   : <prefix>/image/begin  – JSON: {id, size, chunks, dark}
 //   Publish   : <prefix>/image/data   – Binary: [4B img_id BE][2B chunk_idx BE][data]
@@ -77,6 +80,7 @@ static char topicStatus[96];
 static char topicBegin[96];
 static char topicData[96];
 static char topicEnd[96];
+static char topicAck[96];
 
 // ─── Config persistence ───────────────────────────────────────────────────────
 void loadConfig() {
@@ -90,6 +94,7 @@ void loadConfig() {
     strlcpy(cfg.mqtt_client, prefs.getString("mqtt_client", "esp32cam").c_str(), sizeof(cfg.mqtt_client));
     strlcpy(cfg.mqtt_prefix, prefs.getString("mqtt_prefix", "cam/01").c_str(),   sizeof(cfg.mqtt_prefix));
     cfg.cam_flip =           prefs.getUChar("cam_flip",    0);
+    cfg.capture_interval_ms = prefs.getUInt("cap_interval",  CAPTURE_INTERVAL_MS);
     prefs.end();
 }
 
@@ -104,6 +109,7 @@ void saveConfig() {
     prefs.putString("mqtt_client", cfg.mqtt_client);
     prefs.putString("mqtt_prefix", cfg.mqtt_prefix);
     prefs.putUChar("cam_flip",    cfg.cam_flip);
+    prefs.putUInt("cap_interval",  cfg.capture_interval_ms);
     prefs.end();
     Serial.println("[Config] Saved to NVS");
 }
@@ -193,14 +199,15 @@ static void setFlash(bool on) {
 
 // ─── Red status LED ───────────────────────────────────────────────────────────
 // Capturing : 2 blinks every 3 s  (ON·80 ms OFF·200 ms ON·80 ms OFF·2640 ms)
-// Idle      : 1 blink  every 3 s  (ON·80 ms OFF·2920 ms)
+// Idle      : 1 blink  every 10 s (ON·80 ms OFF·9920 ms)
 // Called each loop() iteration.
 static void updateLed() {
-    unsigned long t = millis() % 3000UL;
     bool on;
     if (capturing) {
+        unsigned long t = millis() % 3000UL;
         on = (t < 80) || (t >= 280 && t < 360);
     } else {
+        unsigned long t = millis() % 10000UL;
         on = (t < 80);
     }
     digitalWrite(RED_LED_PIN, on ? LOW : HIGH);  // active LOW
@@ -236,23 +243,27 @@ static void buildTopics() {
     snprintf(topicBegin,  sizeof(topicBegin),  "%s/image/begin", cfg.mqtt_prefix);
     snprintf(topicData,   sizeof(topicData),   "%s/image/data",  cfg.mqtt_prefix);
     snprintf(topicEnd,    sizeof(topicEnd),    "%s/image/end",   cfg.mqtt_prefix);
+    snprintf(topicAck,    sizeof(topicAck),    "%s/ack",         cfg.mqtt_prefix);
     Serial.printf("[MQTT] Topics prefix: %s\n", cfg.mqtt_prefix);
 }
 
 static void mqttCallback(char* topic, byte* payload, unsigned int len) {
-    // Accept commands up to 15 chars
-    char msg[16] = {0};
+    // Buffer: longest expected message is {"interval":3600000} = 20 chars
+    char msg[48] = {0};
     memcpy(msg, payload, min(len, (unsigned int)(sizeof(msg) - 1)));
 
     Serial.printf("[MQTT] CMD received: \"%s\"\n", msg);
 
+    char ack[96] = {0};  // JSON published to <prefix>/ack
+
     if (strcmp(msg, "start") == 0) {
         if (!capturing) {
             capturing   = true;
-            lastCapture = millis() - CAPTURE_INTERVAL_MS;  // Capture immediately
+            lastCapture = millis() - cfg.capture_interval_ms;  // Capture immediately
             mqtt.publish(topicStatus, "capturing", /*retain=*/true);
             Serial.println("[MQTT] Capture STARTED");
         }
+        snprintf(ack, sizeof(ack), "{\"ok\":true,\"cmd\":\"start\"}");
     } else if (strcmp(msg, "stop") == 0) {
         if (capturing) {
             capturing = false;
@@ -260,19 +271,62 @@ static void mqttCallback(char* topic, byte* payload, unsigned int len) {
             mqtt.publish(topicStatus, "idle", /*retain=*/true);
             Serial.println("[MQTT] Capture STOPPED");
         }
-    } else if (strcmp(msg, "flash_on") == 0) {
-        flashOverride   = true;
-        flashOverrideOn = true;
-        Serial.println("[MQTT] Flash forced ON");
-    } else if (strcmp(msg, "flash_off") == 0) {
-        flashOverride   = true;
-        flashOverrideOn = false;
-        setFlash(false);
-        Serial.println("[MQTT] Flash forced OFF");
-    } else if (strcmp(msg, "flash_auto") == 0) {
-        flashOverride = false;
-        Serial.println("[MQTT] Flash set to AUTO");
+        snprintf(ack, sizeof(ack), "{\"ok\":true,\"cmd\":\"stop\"}");
+    } else if (strstr(msg, "\"flash\"")) {
+        // JSON flash command: {"flash":"on"} | {"flash":"off"} | {"flash":"auto"}
+        // Value is case-insensitive.
+        char val[8] = {0};
+        const char* colon = strchr(msg, ':');
+        if (colon) {
+            const char* p = colon + 1;
+            while (*p == ' ' || *p == '\t' || *p == '"') p++;
+            size_t i = 0;
+            while (i < sizeof(val) - 1 && *p && *p != '"' && *p != '}' && *p != ' ')
+                val[i++] = (char)tolower((unsigned char)*p++);
+        }
+        if (strcmp(val, "on") == 0) {
+            flashOverride   = true;
+            flashOverrideOn = true;
+            Serial.println("[MQTT] Flash forced ON");
+            snprintf(ack, sizeof(ack), "{\"ok\":true,\"flash\":\"on\"}");
+        } else if (strcmp(val, "off") == 0) {
+            flashOverride   = true;
+            flashOverrideOn = false;
+            setFlash(false);
+            Serial.println("[MQTT] Flash forced OFF");
+            snprintf(ack, sizeof(ack), "{\"ok\":true,\"flash\":\"off\"}");
+        } else if (strcmp(val, "auto") == 0) {
+            flashOverride = false;
+            Serial.println("[MQTT] Flash set to AUTO");
+            snprintf(ack, sizeof(ack), "{\"ok\":true,\"flash\":\"auto\"}");
+        } else {
+            Serial.printf("[MQTT] Unknown flash value: \"%s\"\n", val);
+            snprintf(ack, sizeof(ack), "{\"ok\":false,\"flash\":\"?\",\"error\":\"unknown value\"}");
+        }
+    } else if (strstr(msg, "\"interval\"")) {
+        // JSON interval command: {"interval":<ms>}  (1000–3600000)
+        const char* colon = strchr(msg, ':');
+        if (colon) {
+            long v = atol(colon + 1);
+            if (v >= 1000 && v <= 3600000) {
+                cfg.capture_interval_ms = (uint32_t)v;
+                Serial.printf("[MQTT] Capture interval set to %u ms\n", cfg.capture_interval_ms);
+                snprintf(ack, sizeof(ack), "{\"ok\":true,\"interval\":%ld}", v);
+            } else {
+                Serial.printf("[MQTT] interval out of range (1000–3600000): %ld\n", v);
+                snprintf(ack, sizeof(ack),
+                         "{\"ok\":false,\"interval\":%ld,\"error\":\"out of range (1000-3600000)\"}", v);
+            }
+        } else {
+            snprintf(ack, sizeof(ack), "{\"ok\":false,\"error\":\"malformed interval command\"}");
+        }
+    } else {
+        Serial.printf("[MQTT] Unknown command: \"%s\"\n", msg);
+        snprintf(ack, sizeof(ack), "{\"ok\":false,\"error\":\"unknown command\"}");
     }
+
+    mqtt.publish(topicAck, ack, /*retain=*/false);
+    Serial.printf("[MQTT] ACK → %s\n", ack);
 }
 
 static void connectMqtt() {
@@ -442,7 +496,7 @@ void setup() {
     connectMqtt();
 
     // First capture triggers immediately (no initial delay)
-    lastCapture = millis() - CAPTURE_INTERVAL_MS;
+    lastCapture = millis() - cfg.capture_interval_ms;
 
     Serial.println("[Boot] Ready – capturing every 5.5 s");
 }
@@ -467,7 +521,7 @@ void loop() {
     updateLed();
 
     // Timed image capture
-    if (capturing && (millis() - lastCapture >= CAPTURE_INTERVAL_MS)) {
+    if (capturing && (millis() - lastCapture >= cfg.capture_interval_ms)) {
         lastCapture = millis();
         captureAndSend();
     }

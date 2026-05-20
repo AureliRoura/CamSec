@@ -12,4 +12,5 @@ struct AppConfig {
     char     mqtt_client[32];   // MQTT client ID
     char     mqtt_prefix[64];   // MQTT topic prefix (e.g. "cam/01")
     uint8_t  cam_flip;          // 0=normal, 1=cap per avall (180°)
+    uint32_t capture_interval_ms; // Interval between captures (ms, default 5500)
 };
