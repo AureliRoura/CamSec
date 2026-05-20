@@ -162,6 +162,7 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `GET` | `/live/stream` | SSE en temps real de les imatges raw de les càmeres |
 | `GET` | `/api/live/latest` | Darrer frame per càmera (JSON) |
 | `GET` | `/api/live/image/<prefix>` | Últim JPEG en brut d'una càmera concreta |
+| `POST` | `/api/cmd/<prefix>` | Envia una comanda MQTT a la càmera: `{"cmd":"start\|stop"}`, `{"flash":"on\|off\|auto"}`, `{"interval":<ms>}` |
 | `GET` | `/help` | Pàgina web d'ajuda: endpoints disponibles i variables de configuració |
 
 ---
@@ -354,6 +355,7 @@ Access at **http://\<server-ip\>:8088**
 | `GET` | `/live/stream` | SSE real-time stream of raw camera frames |
 | `GET` | `/api/live/latest` | Latest frame per camera (JSON) |
 | `GET` | `/api/live/image/<prefix>` | Latest raw JPEG for a specific camera |
+| `POST` | `/api/cmd/<prefix>` | Publish an MQTT command to a camera: `{"cmd":"start\|stop"}`, `{"flash":"on\|off\|auto"}`, `{"interval":<ms>}` |
 | `GET` | `/help` | Web help page: available endpoints and configuration variables |
 
 ## MQTT topics

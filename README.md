@@ -313,6 +313,7 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `DELETE /api/image/<id>` | Elimina una foto concreta |
 | `GET /stream` | Server-Sent Events en temps real |
 | `GET /embed` | Panel mínim per `<iframe>` |
+| `POST /api/cmd/<prefix>` | Envia una comanda MQTT a una càmera: `start`, `stop`, flash, interval |
 
 ---
 
@@ -506,6 +507,7 @@ Access at **http://\<server-ip\>:8088**
 | `DELETE /api/image/<id>` | Delete a specific photo |
 | `GET /stream` | Server-Sent Events stream |
 | `GET /embed` | Minimal panel for `<iframe>` |
+| `POST /api/cmd/<prefix>` | Send an MQTT command to a camera: `start`, `stop`, flash, interval |
 
 ## Desktop viewer (optional)
 

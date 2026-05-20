@@ -19,6 +19,7 @@ Endpoints:
   DEL /api/image/<img_id>        – Delete an alert image
   GET /api/live/latest           – JSON: latest raw frame per camera
   GET /api/live/image/<prefix>   – Serve latest raw JPEG for a camera
+  POST /api/cmd/<prefix>         – Publish MQTT command to a camera (start/stop/flash/interval)
   GET /help                      – Help page: endpoints and config variables
 
 Disk persistence (optional):
@@ -112,6 +113,9 @@ _live_ts:   Dict[str, float] = {}   # prefix -> epoch timestamp
 # SSE subscriber queues (live camera feed)
 _live_sse_queues: list = []
 _live_sse_lock = threading.Lock()
+
+# MQTT client reference – set by _start_mqtt; used by Flask routes to publish
+_mqtt_client = None
 
 
 def _store_live(prefix: str, jpeg: bytes):
@@ -484,6 +488,7 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
 
 
 def _start_mqtt():
+    global _mqtt_client
     client = mqtt.Client(
         client_id=MQTT_CLIENT,
         protocol=mqtt.MQTTv311,
@@ -494,6 +499,7 @@ def _start_mqtt():
     client.on_connect    = _on_connect
     client.on_disconnect = _on_disconnect
     client.on_message    = _on_message
+    _mqtt_client = client
 
     while True:
         try:
@@ -961,6 +967,16 @@ _LIVE_HTML = """<!DOCTYPE html>
 #empty p{font-size:.85em;margin-top:.4em}
 nav a{color:#58a6ff;font-size:.85em;text-decoration:none}
 nav a:hover{text-decoration:underline}
+.card .ctrl{padding:.5em .7em;border-top:1px solid #21262d;display:flex;flex-direction:column;gap:.35em}
+.ctrl-row{display:flex;align-items:center;gap:.3em;flex-wrap:wrap}
+.ctrl-lbl{font-size:.72em;color:#8b949e;min-width:4.2em}
+.btn-ctrl{font-size:.74em;padding:.22em .55em;border-radius:4px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;cursor:pointer;transition:background .15s,border-color .15s;line-height:1.4}
+.btn-ctrl:hover{background:#2d333b;border-color:#58a6ff}
+.btn-start{border-color:#238636;color:#3fb950}
+.btn-start:hover{background:#0f2d1a}
+.btn-stop{border-color:#7f1d1d;color:#f85149}
+.btn-stop:hover{background:#2d1111}
+.interval-inp{width:5.5em;padding:.2em .4em;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:.74em;text-align:right}
 </style>
 </head>
 <body>
@@ -1022,10 +1038,54 @@ function updateCard(camera, tsIso) {
     <div class="info">
       <b>${camera}</b><br>
       <span class="ts">${tsIso || ''}</span>
+    </div>
+    <div class="ctrl" data-cam="${camera}">
+      <div class="ctrl-row">
+        <button class="btn-ctrl btn-start" data-cmd='{"cmd":"start"}'>&#9654; Engegar</button>
+        <button class="btn-ctrl btn-stop"  data-cmd='{"cmd":"stop"}' >&#9632; Parar</button>
+      </div>
+      <div class="ctrl-row">
+        <span class="ctrl-lbl">Flash:</span>
+        <button class="btn-ctrl" data-cmd='{"flash":"auto"}'>Auto</button>
+        <button class="btn-ctrl" data-cmd='{"flash":"on"}' >On</button>
+        <button class="btn-ctrl" data-cmd='{"flash":"off"}'>Off</button>
+      </div>
+      <div class="ctrl-row">
+        <span class="ctrl-lbl">Interval:</span>
+        <input class="interval-inp" type="number" min="1000" max="3600000" step="500" value="5500">
+        <button class="btn-ctrl btn-apply">Aplicar</button>
+      </div>
     </div>`;
   cards[camera] = card;
   grid.appendChild(card);
 }
+
+// ── Envia comanda MQTT a la càmera ────────────────────────────────────────────
+function sendCmd(cam, payload) {
+  fetch('/api/cmd/' + cam, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(d => { if (!d.ok) console.warn('[CamSec] CMD failed:', d.error); })
+  .catch(err => console.error('[CamSec] CMD error:', err));
+}
+
+// Delegació d'events als controls de cada targeta
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.btn-ctrl');
+  if (!btn) return;
+  const ctrl = btn.closest('.ctrl');
+  if (!ctrl) return;
+  const cam = ctrl.dataset.cam;
+  if (btn.classList.contains('btn-apply')) {
+    const v = parseInt(ctrl.querySelector('.interval-inp').value, 10);
+    if (v >= 1000 && v <= 3600000) sendCmd(cam, {interval: v});
+  } else if (btn.dataset.cmd) {
+    sendCmd(cam, JSON.parse(btn.dataset.cmd));
+  }
+});
 </script>
 </body>
 </html>
@@ -1089,6 +1149,44 @@ def api_live_image(prefix: str):
                     headers={"Cache-Control": "no-store"})
 
 
+@app.route("/api/cmd/<path:prefix>", methods=["POST"])
+def api_cmd(prefix: str):
+    """Publish an MQTT command to a camera.
+
+    Body JSON:
+      {"cmd": "start"|"stop"}
+      {"flash": "on"|"off"|"auto"}
+      {"interval": <ms>}   1000 ≤ ms ≤ 3600000
+    """
+    if _mqtt_client is None:
+        return jsonify({"ok": False, "error": "MQTT not connected"}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    if "cmd" in data:
+        cmd = str(data["cmd"]).lower()
+        if cmd not in ("start", "stop"):
+            return jsonify({"ok": False, "error": "cmd must be 'start' or 'stop'"}), 400
+        payload = cmd
+    elif "flash" in data:
+        val = str(data["flash"]).lower()
+        if val not in ("on", "off", "auto"):
+            return jsonify({"ok": False, "error": "flash must be 'on', 'off' or 'auto'"}), 400
+        payload = json.dumps({"flash": val})
+    elif "interval" in data:
+        try:
+            ms = int(data["interval"])
+        except (ValueError, TypeError):
+            return jsonify({"ok": False, "error": "interval must be an integer"}), 400
+        if not (1000 <= ms <= 3600000):
+            return jsonify({"ok": False, "error": "interval out of range (1000–3600000)"}), 400
+        payload = json.dumps({"interval": ms})
+    else:
+        return jsonify({"ok": False, "error": "unknown command"}), 400
+    topic = f"{prefix}/cmd"
+    _mqtt_client.publish(topic, payload, qos=0)
+    log.info("CMD → %s : %s", topic, payload)
+    return jsonify({"ok": True, "topic": topic, "payload": payload})
+
+
 HELP_HTML = """<!DOCTYPE html>
 <html lang="ca">
 <head>
@@ -1130,6 +1228,7 @@ HELP_HTML = """<!DOCTYPE html>
       font-family: monospace; letter-spacing: 0.03em;
     }
     .get    { background: #14532d; color: #86efac; }
+    .post   { background: #1d4ed8; color: #bfdbfe; }
     .delete { background: #7f1d1d; color: #fca5a5; }
     .mono   { font-family: monospace; font-size: 0.85rem; color: #7dd3fc; }
     .default{ font-family: monospace; font-size: 0.82rem; color: #a78bfa; }
@@ -1166,6 +1265,11 @@ HELP_HTML = """<!DOCTYPE html>
         <td><span class="badge get">GET</span></td>
         <td><span class="mono">/api/live/image/&lt;prefix&gt;</span></td>
         <td>Serveix l'últim JPEG en brut d'una càmera concreta</td>
+      </tr>
+      <tr>
+        <td><span class="badge post">POST</span></td>
+        <td><span class="mono">/api/cmd/&lt;prefix&gt;</span></td>
+        <td>Envia una comanda MQTT a la càmera: <code>{"cmd":"start|stop"}</code>, <code>{"flash":"on|off|auto"}</code>, <code>{"interval":&lt;ms&gt;}</code></td>
       </tr>
       <tr>
         <td><span class="badge get">GET</span></td>
