@@ -140,7 +140,7 @@ Cada 10 alertes el viewer neteja les imatges antigues:
 Accedeix a **http://\<ip-servidor\>:8088**
 
 - **Vista principal** (`/`) — una targeta per càmera amb la darrera foto detectada (alertes amb detecció de persona).
-- **Directe** (`/live`) — última imatge rebuda de cada càmera en temps real, sense filtrar per detecció.
+- **Directe** (`/live`) — última imatge rebuda de cada càmera en temps real, sense filtrar per detecció. Inclou controls per a cada càmera: **engegar/aturar** la captura, **flash** (Auto/On/Off), **interval** entre captures (ms) i **indicador d'estat** (Online/Capturant/Aturada/Offline).
 - **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (des del disc si la persistència és activa, altrament memòria RAM); clica una foto per veure-la a pantalla completa (lightbox); mostra l'ID de cada foto.
 - **Eliminar fotos** — botó 🗑️ a cada foto de l'historial per eliminar-la individualment; botó **Elimina totes** a la capçalera del modal per buidar tota la càmera.
 - **Temps real** — s'actualitza automàticament via Server-Sent Events (SSE) sense cal recarregar la pàgina.

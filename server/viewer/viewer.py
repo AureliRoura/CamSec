@@ -1380,7 +1380,7 @@ HELP_HTML = """<!DOCTYPE html>
       <tr><td class="mono">MQTT_PORT</td>   <td class="default">1883</td>         <td>Port TCP del broker MQTT</td></tr>
       <tr><td class="mono">MQTT_USER</td>   <td class="default">""</td>           <td>Usuari MQTT (opcional)</td></tr>
       <tr><td class="mono">MQTT_PASS</td>   <td class="default">""</td>           <td>Contrasenya MQTT (opcional)</td></tr>
-      <tr><td class="mono">MQTT_CLIENT</td> <td class="default">camsec-viewer</td><td>Client ID MQTT</td></tr>
+      <tr><td class="mono">MQTT_CLIENT</td> <td class="default">camsec-viewer-MMSS</td><td>Client ID MQTT (MMSS = minut i segon d'arrencada)</td></tr>
       <tr><td class="mono">CHUNK_SIZE</td>  <td class="default">4096</td>         <td>Mida del chunk en bytes (ha de coincidir amb la càmera)</td></tr>
       <tr><td class="mono">MAX_ALERTS</td>  <td class="default">50</td>           <td>Màxim d'alertes conservades en memòria RAM</td></tr>
       <tr><td class="mono">PERSIST_DIR</td>     <td class="default">/data/alerts</td> <td>Directori on es desen les imatges d'alerta (buit = desactivat)</td></tr>

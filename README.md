@@ -297,6 +297,7 @@ Captura JPEG (5.5 s)
 Accedeix a **http://\<ip-servidor\>:8088**
 
 - **Vista principal:** una targeta per càmera amb la **última foto detectada**.
+- **Directe** (`/live`) — última imatge de cada càmera en temps real. Controls per a cada càmera: engegar/aturar captura, flash (Auto/On/Off), interval entre captures i indicador d'estat (Online/Capturant/Aturada/Offline).
 - **Historial:** clica qualsevol targeta per veure totes les fotos d'aquella càmera.
 - **Eliminar fotos:** botó 🗑 a cada foto de l'historial; botó "Elimina totes" per buidar tota la càmera.
 - **Temps real:** les targetes s'actualitzen automàticament via Server-Sent Events (SSE).
@@ -491,6 +492,7 @@ sudo systemctl enable --now mosquitto
 Access at **http://\<server-ip\>:8088**
 
 - **Main view:** one card per camera with the latest detected photo.
+- **Live view** (`/live`) — latest frame from each camera in real time. Per-camera controls: start/stop capture, flash (Auto/On/Off), capture interval and status badge (Online/Capturing/Idle/Offline).
 - **History:** click any card to see all photos from that camera.
 - **Delete photos:** 🗑 button on each photo; "Delete all" button to clear a whole camera.
 - **Real time:** cards update automatically via Server-Sent Events (SSE).
