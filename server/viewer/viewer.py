@@ -107,8 +107,9 @@ _sse_lock = threading.Lock()
 
 # Live camera store – latest raw JPEG per camera (no persistence)
 _live_lock = threading.Lock()
-_live_jpeg: Dict[str, bytes] = {}   # prefix -> latest JPEG
-_live_ts:   Dict[str, float] = {}   # prefix -> epoch timestamp
+_live_jpeg:   Dict[str, bytes] = {}   # prefix -> latest JPEG
+_live_ts:     Dict[str, float] = {}   # prefix -> epoch timestamp
+_live_status: Dict[str, str]   = {}   # prefix -> "online"|"capturing"|"idle"|"offline"
 
 # SSE subscriber queues (live camera feed)
 _live_sse_queues: list = []
@@ -123,7 +124,8 @@ def _store_live(prefix: str, jpeg: bytes):
     with _live_lock:
         _live_jpeg[prefix] = jpeg
         _live_ts[prefix]   = ts
-    event = "data: " + json.dumps({"camera": prefix, "ts": ts}) + "\n\n"
+        status = _live_status.get(prefix, "")
+    event = "data: " + json.dumps({"camera": prefix, "ts": ts, "status": status}) + "\n\n"
     with _live_sse_lock:
         dead = []
         for q in _live_sse_queues:
@@ -361,6 +363,9 @@ def _on_connect(client, userdata, flags, rc):
         client.subscribe("+/+/image/data", 0)
         client.subscribe("+/image/end", 0)
         client.subscribe("+/+/image/end", 0)
+        # Camera status topics
+        client.subscribe("+/status", 0)
+        client.subscribe("+/+/status", 0)
     else:
         log.error("MQTT connect failed rc=%d", rc)
 
@@ -482,6 +487,24 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
                     return
                 _store_live(prefix, buf.assemble())
                 log.debug("[%s] Live frame #%d (%d B)", prefix, img_id, buf.chunks * CHUNK_SIZE)
+
+        # ── camera status ──
+        elif action == "status" and len(parts) >= 2:
+            prefix = "/".join(parts[:-1])
+            status = msg.payload.decode("utf-8", errors="replace").strip()
+            with _live_lock:
+                _live_status[prefix] = status
+            event = "data: " + json.dumps({"camera": prefix, "status": status}) + "\n\n"
+            with _live_sse_lock:
+                dead = []
+                for q in _live_sse_queues:
+                    try:
+                        q.put_nowait(event)
+                    except queue.Full:
+                        dead.append(q)
+                for q in dead:
+                    _live_sse_queues.remove(q)
+            log.debug("[%s] Status: %s", prefix, status)
 
     except Exception:
         log.exception("Error handling topic '%s'", topic)
@@ -977,6 +1000,12 @@ nav a:hover{text-decoration:underline}
 .btn-stop{border-color:#7f1d1d;color:#f85149}
 .btn-stop:hover{background:#2d1111}
 .interval-inp{width:5.5em;padding:.2em .4em;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:.74em;text-align:right}
+.status-badge{display:inline-block;font-size:.7em;padding:.1em .4em;border-radius:3px;font-weight:600;vertical-align:middle;margin-left:.3em}
+.s-capturing{background:#1e1500;border:1px solid #9e6a03;color:#d29922}
+.s-online{background:#0f2d1a;border:1px solid #238636;color:#3fb950}
+.s-idle{background:#1c1c1c;border:1px solid #30363d;color:#8b949e}
+.s-offline{background:#2d1111;border:1px solid #7f1d1d;color:#f85149}
+.s-unknown{background:#1c1c1c;border:1px solid #30363d;color:#484f58}
 </style>
 </head>
 <body>
@@ -1006,18 +1035,23 @@ const cards = {};
 
 // Load existing cameras
 fetch('/api/live/latest').then(r=>r.json()).then(cams=>{
-  cams.forEach(c => updateCard(c.camera, c.ts_iso));
+  cams.forEach(c => updateCard(c.camera, c.ts_iso, c.status));
 });
 
 const es = new EventSource('/live/stream');
 es.onmessage = e => {
   const d = JSON.parse(e.data);
-  updateCard(d.camera, new Date(d.ts * 1000).toISOString().replace('T',' ').replace('Z',' UTC'));
+  if (d.ts !== undefined) {
+    const tsIso = new Date(d.ts * 1000).toISOString().replace('T',' ').replace('Z',' UTC');
+    updateCard(d.camera, tsIso, d.status);
+  } else if (d.status !== undefined && cards[d.camera]) {
+    updateStatus(cards[d.camera], d.status);
+  }
 };
 es.onerror = () => { dot.style.background='#f85149'; };
 es.onopen  = () => { dot.style.background='#3fb950'; };
 
-function updateCard(camera, tsIso) {
+function updateCard(camera, tsIso, status) {
   const empty = document.getElementById('empty');
   if (empty) empty.remove();
 
@@ -1027,6 +1061,7 @@ function updateCard(camera, tsIso) {
     const url = '/api/live/image/' + camera + '?t=' + Date.now();
     img.src = url;
     cards[camera].querySelector('.ts').textContent = tsIso || '';
+    if (status !== undefined) updateStatus(cards[camera], status);
     return;
   }
 
@@ -1036,7 +1071,7 @@ function updateCard(camera, tsIso) {
   card.innerHTML = `
     <img src="${url}" alt="${camera}" onerror="this.style.opacity='.3'">
     <div class="info">
-      <b>${camera}</b><br>
+      <b>${camera}</b><span class="status-badge s-unknown cam-status"></span><br>
       <span class="ts">${tsIso || ''}</span>
     </div>
     <div class="ctrl" data-cam="${camera}">
@@ -1058,9 +1093,19 @@ function updateCard(camera, tsIso) {
     </div>`;
   cards[camera] = card;
   grid.appendChild(card);
+  if (status !== undefined) updateStatus(card, status);
 }
 
-// ── Envia comanda MQTT a la càmera ────────────────────────────────────────────
+// ── Mostra l'estat de la càmera al badge ────────────────────────────────────
+const STATUS_LABEL = {online:'Online', capturing:'Capturant', idle:'Aturada', offline:'Offline'};
+const STATUS_CLASS = {online:'s-online', capturing:'s-capturing', idle:'s-idle', offline:'s-offline'};
+
+function updateStatus(card, status) {
+  const el = card.querySelector('.cam-status');
+  if (!el) return;
+  el.textContent = STATUS_LABEL[status] || status;
+  el.className   = 'status-badge cam-status ' + (STATUS_CLASS[status] || 's-unknown');
+}
 function sendCmd(cam, payload) {
   fetch('/api/cmd/' + cam, {
     method: 'POST',
@@ -1132,7 +1177,8 @@ def api_live_latest():
         result = [
             {"camera": cam, "ts": _live_ts[cam],
              "ts_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_live_ts[cam])),
-             "url": f"/api/live/image/{cam}"}
+             "url": f"/api/live/image/{cam}",
+             "status": _live_status.get(cam, "")}
             for cam in _live_jpeg
         ]
     return jsonify(result)
