@@ -16,7 +16,7 @@ Firmware per a una placa **AI-Thinker ESP32-CAM** (OV2640) que captura imatges J
 | Resolució | UXGA (1600×1200) amb PSRAM · VGA (640×480) sense |
 | Detecció de poca llum | Frame de prova > 200 KB → activa el LED de flaix |
 | Enviament per MQTT | Imatge dividida en chunks de **4 096 bytes** |
-| Comandes MQTT | `start` · `stop` |
+| Comandes MQTT | `start` · `stop` · `force_image` |
 | Orientació de la càmera | Rotació 180° configurable des del portal web |
 | Mode configuració | Portal web en punt d'accés (prem BOOT 5 s a l'arrencada) |
 
@@ -145,12 +145,13 @@ Substitueix `cam/01` pel prefix configurat.
 
 | Topic | Direcció | Format | Descripció |
 |---|---|---|---|
-| `cam/01/cmd` | Subscripció | text / JSON | `start` · `stop` · `{"flash":"on|off|auto"}` · `{"interval":<ms>}` |
+| `cam/01/cmd` | Subscripció | text / JSON | `start` · `stop` · `{"flash":"on|off|auto"}` · `{"interval":<ms>}` · `{"force_image":true|false}` |
 | `cam/01/ack` | Publicació | JSON | `{"ok":true,"cmd":"start"}` · `{"ok":false,"error":"..."}` |
 | `cam/01/status` | Publicació | text | `online` · `capturing` · `idle` · `offline` |
 | `cam/01/image/begin` | Publicació | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
 | `cam/01/image/data` | Publicació | binari | `[4B id BE][2B chunk_idx BE][dades JPEG]` |
 | `cam/01/image/end` | Publicació | JSON | `{"id":1,"chunks":11,"ok":1}` |
+| `cam/01/image/same` | Publicació | JSON | `{"id":2,"same_as":1,"size":44910,"dark":0,"mode":"quasi","score":97}` |
 
 ### Comandes MQTT (`<prefix>/cmd`)
 
@@ -162,11 +163,13 @@ Substitueix `cam/01` pel prefix configurat.
 | `{"flash":"off"}` | Força el flaix **sempre apagat** (ignora la detecció de llum) |
 | `{"flash":"auto"}` | Restaura la detecció automàtica de poca llum (mode per defecte) |
 | `{"interval":<ms>}` | Canvia l'interval entre captures en temps real (p. ex. `{"interval":10000}`) |
+| `{"force_image":true}` | Força que la següent captura s'enviï com a JPEG complet (ignora `image/same` una vegada) |
 
 El valor de `flash` és insensible a majúscules/minúscules (`"ON"`, `"Off"` i `"on"` són equivalents).
 
 > Els canvis de `flash` persisteixen fins que s'envia `{"flash":"auto"}` o es reinicia la placa.
 > `{"interval":<ms>}` pren efecte immediatament però no es guarda a NVS; usa el portal web per fer-ho persistent.
+> `{"force_image":true}` és d'un sol ús: s'aplica a la propera captura i després es reinicia automàticament.
 
 ### Reconstrucció d'imatge (exemple Python)
 
@@ -195,6 +198,10 @@ def on_message(client, userdata, msg):
             with open(f"image_{meta['id']}.jpg", "wb") as f:
                 f.write(jpeg)
             print(f"Image {meta['id']} saved ({len(jpeg)} B)")
+    elif t.endswith("/image/same"):
+        import json
+        same = json.loads(msg.payload)
+        print(f"Image {same['id']} is same as {same['same_as']} (mode={same.get('mode','exact')})")
 
 c = mqtt.Client()
 c.on_message = on_message
@@ -253,7 +260,7 @@ Firmware for an **AI-Thinker ESP32-CAM** board (OV2640) that periodically captur
 | Resolution | UXGA (1600×1200) with PSRAM · VGA (640×480) without |
 | Low-light detection | Probe frame > 200 KB → activates flash LED |
 | MQTT transmission | Image split into **4 096-byte** chunks |
-| MQTT commands | `start` · `stop` |
+| MQTT commands | `start` · `stop` · `force_image` |
 | Camera orientation | 180° rotation configurable from the web portal |
 | Configuration mode | Web portal in access point mode (hold BOOT for 5 s at boot) |
 
@@ -295,12 +302,13 @@ Replace `cam/01` with the prefix you configured.
 
 | Topic | Direction | Format | Description |
 |---|---|---|---|
-| `cam/01/cmd` | Subscribe | text / JSON | `start` · `stop` · `{"flash":"on|off|auto"}` · `{"interval":<ms>}` |
+| `cam/01/cmd` | Subscribe | text / JSON | `start` · `stop` · `{"flash":"on|off|auto"}` · `{"interval":<ms>}` · `{"force_image":true|false}` |
 | `cam/01/ack` | Publish | JSON | `{"ok":true,"cmd":"start"}` · `{"ok":false,"error":"..."}` |
 | `cam/01/status` | Publish | text | `online` · `capturing` · `idle` · `offline` |
 | `cam/01/image/begin` | Publish | JSON | `{"id":1,"size":45000,"chunks":11,"dark":0}` |
 | `cam/01/image/data` | Publish | binary | `[4B id BE][2B chunk_idx BE][JPEG data]` |
 | `cam/01/image/end` | Publish | JSON | `{"id":1,"chunks":11,"ok":1}` |
+| `cam/01/image/same` | Publish | JSON | `{"id":2,"same_as":1,"size":44910,"dark":0,"mode":"quasi","score":97}` |
 
 ## MQTT commands (`<prefix>/cmd`)
 
@@ -312,11 +320,13 @@ Replace `cam/01` with the prefix you configured.
 | `{"flash":"off"}` | Force flash **always off** (ignore low-light detection) |
 | `{"flash":"auto"}` | Restore automatic low-light detection (default) |
 | `{"interval":<ms>}` | Change the capture interval at runtime (e.g. `{"interval":10000}`) |
+| `{"force_image":true}` | Force the next capture to be sent as a full JPEG (skip `image/same` once) |
 
 The `flash` value is case-insensitive (`"ON"`, `"Off"` and `"on"` are all accepted).
 
 > Flash overrides persist until `{"flash":"auto"}` is sent or the board is rebooted.
 > `{"interval":<ms>}` takes effect immediately but is not saved to NVS; use the web portal for a persistent change.
+> `{"force_image":true}` is one-shot: it applies to the next capture only and then resets automatically.
 
 ## Adjustable parameters (`main.cpp`)
 

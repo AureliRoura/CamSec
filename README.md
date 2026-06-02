@@ -249,6 +249,9 @@ Captura JPEG (5.5 s)
   ├─► cam/01/image/begin ──►  broker  ──► detector
   ├─► cam/01/image/data  ──►  broker  ──► detector  (reassembla el JPEG)
   └─► cam/01/image/end   ──►  broker  ──► detector
+
+Si la imatge és igual o quasi igual a l'última enviada:
+   └─► cam/01/image/same  ──►  broker  ──► detector/viewer (sense JPEG)
                                               │
                                          YOLOv8 detecta persones
                                               │
@@ -272,6 +275,7 @@ Captura JPEG (5.5 s)
 | `<prefix>/image/begin` | càmera → broker | JSON: `{id, size, chunks, dark}` |
 | `<prefix>/image/data`  | càmera → broker | Binari: `[4B id][2B idx][dades JPEG]` |
 | `<prefix>/image/end`   | càmera → broker | JSON: `{id, chunks, ok}` |
+| `<prefix>/image/same`  | càmera → broker | JSON: `{id, same_as, size, dark, mode[, score]}` |
 | `<prefix>/cmd`         | broker → càmera | `"start"` \| `"stop"` \| `{"flash":"on\|off\|auto"}` \| `{"interval":<ms>}` |
 | `<prefix>/ack`         | càmera → broker | JSON: `{ok, cmd\|flash\|interval[, error]}` |
 | `<prefix>/status`      | càmera → broker | `"online"` \| `"capturing"` \| `"idle"` \| `"offline"` |
@@ -529,6 +533,7 @@ python cam_viewer.py
 | `<prefix>/image/begin` | camera → broker | JSON: `{id, size, chunks, dark}` |
 | `<prefix>/image/data`  | camera → broker | Binary: `[4B id][2B idx][JPEG data]` |
 | `<prefix>/image/end`   | camera → broker | JSON: `{id, chunks, ok}` |
+| `<prefix>/image/same`  | camera → broker | JSON: `{id, same_as, size, dark, mode[, score]}` |
 | `<prefix>/cmd`         | broker → camera | `"start"` \| `"stop"` \| `{"flash":"on\|off\|auto"}` \| `{"interval":<ms>}` |
 | `<prefix>/ack`         | camera → broker | JSON: `{ok, cmd\|flash\|interval[, error]}` |
 | `<prefix>/status`      | camera → broker | `"online"` \| `"capturing"` \| `"idle"` \| `"offline"` |

@@ -47,6 +47,8 @@ services:
 
       # ── Operational ──────────────────────────────────────────────────────────
       STALE_TTL_S:  "60"        # Discard incomplete image buffers after N seconds
+      SAME_PERSON_ALERT_THRESHOLD: ${SAME_PERSON_ALERT_THRESHOLD:-5}  # warn after N consecutive image/same
+      SAME_PERSON_ALERT_STEP:      ${SAME_PERSON_ALERT_STEP:-5}       # repeat warning every N additional same events
       LOG_LEVEL:    INFO        # DEBUG | INFO | WARNING | ERROR
       YOLO_IMGSZ:   "320"       # Resize input to this before inference (saves RAM on Pi)
     volumes:

@@ -81,6 +81,37 @@ Els topics d'alerta (`*/alert/*`) s'ignoren — el visor mostra únicament les i
 
 ---
 
+## `mqtt_same_probe.py` – Prova de deduplicació MQTT
+
+Script de diagnòstic per mesurar en viu:
+- Frames complets (`image/begin`+`image/end`)
+- Frames deduplicats `image/same` en mode `exact` i `quasi`
+- Percentatge d'estalvi (ratio de `same`)
+- Avisos del detector a `<prefix>/alert/same`
+
+### Execució
+
+```bash
+python mqtt_same_probe.py --broker 192.168.1.10 --duration 120
+
+# Només una càmera
+python mqtt_same_probe.py --broker 192.168.1.10 --prefix cam/01 --duration 90
+```
+
+Si existeix `tools/.env`, l'script el carrega automàticament (pots ometre `--broker`, `--user`, etc.).
+
+### Paràmetres
+
+| Argument | Per defecte | Descripció |
+|---|---|---|
+| `--broker` | `MQTT_BROKER` o `localhost` | Host del broker MQTT |
+| `--port` | `MQTT_PORT` o `1883` | Port del broker |
+| `--prefix` | *(buit)* | Filtra una sola càmera (`cam/01`) |
+| `--duration` | `120` | Durada de la prova en segons (`0` = infinit) |
+| `--print-every` | `10` | Interval del resum per consola |
+
+---
+
 ---
 
 # Desktop Tools — English
@@ -158,3 +189,34 @@ Alert topics (`*/alert/*`) are ignored — the viewer only shows raw camera imag
 | `MQTT_PORT` | `1883` | TCP port of the broker |
 | `MQTT_USER` | *(empty)* | MQTT username (optional) |
 | `MQTT_PASS` | *(empty)* | MQTT password (optional) |
+
+---
+
+## `mqtt_same_probe.py` – MQTT dedup test probe
+
+Diagnostic script to measure in real time:
+- Full frames (`image/begin`+`image/end`)
+- Deduplicated frames via `image/same` (`exact` and `quasi`)
+- Dedup ratio (`same` over total signaled frames)
+- Detector warnings from `<prefix>/alert/same`
+
+### Run
+
+```bash
+python mqtt_same_probe.py --broker 192.168.1.10 --duration 120
+
+# Single camera only
+python mqtt_same_probe.py --broker 192.168.1.10 --prefix cam/01 --duration 90
+```
+
+If `tools/.env` exists, the script auto-loads it (so you can omit `--broker`, `--user`, etc.).
+
+### Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--broker` | `MQTT_BROKER` or `localhost` | MQTT broker host |
+| `--port` | `MQTT_PORT` or `1883` | MQTT broker port |
+| `--prefix` | *(empty)* | Restrict to one camera prefix (`cam/01`) |
+| `--duration` | `120` | Probe duration in seconds (`0` = infinite) |
+| `--print-every` | `10` | Console summary interval |

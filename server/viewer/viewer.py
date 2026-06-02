@@ -4,6 +4,8 @@ CamSec Viewer
 =============
 Lightweight HTTP server that subscribes to MQTT alert topics, reassembles
 annotated JPEG images and serves them via a real-time web dashboard.
+It also handles camera dedup notifications (<prefix>/image/same) so live
+timestamps and status stay fresh even when the camera skips JPEG payloads.
 
 Endpoints:
   GET /                          – Dashboard (real-time alerts, one card per camera)
@@ -19,7 +21,7 @@ Endpoints:
   DEL /api/image/<img_id>        – Delete an alert image
   GET /api/live/latest           – JSON: latest raw frame per camera
   GET /api/live/image/<prefix>   – Serve latest raw JPEG for a camera
-  POST /api/cmd/<prefix>         – Publish MQTT command to a camera (start/stop/flash/interval)
+  POST /api/cmd/<prefix>         – Publish MQTT command to a camera (start/stop/flash/interval/force_image)
   GET /help                      – Help page: endpoints and config variables
 
 Disk persistence (optional):
@@ -54,6 +56,7 @@ MAX_ALERTS   = int(os.getenv("MAX_ALERTS",   "50"))   # alerts kept in memory
 HTTP_HOST    = os.getenv("HTTP_HOST",    "0.0.0.0")
 HTTP_PORT    = int(os.getenv("HTTP_PORT",    "8080"))
 LOG_LEVEL    = os.getenv("LOG_LEVEL",    "INFO")
+FORCE_IMAGE_REQUEST_COOLDOWN_S = float(os.getenv("FORCE_IMAGE_REQUEST_COOLDOWN_S", "15"))
 PERSIST_DIR     = os.getenv("PERSIST_DIR",     "")        # empty = disabled
 MAX_DISK_ALERTS = int(os.getenv("MAX_DISK_ALERTS", "500"))
 MAX_DISK_DAYS   = int(os.getenv("MAX_DISK_DAYS",   "7"))
@@ -110,6 +113,9 @@ _live_lock = threading.Lock()
 _live_jpeg:   Dict[str, bytes] = {}   # prefix -> latest JPEG
 _live_ts:     Dict[str, float] = {}   # prefix -> epoch timestamp
 _live_status: Dict[str, str]   = {}   # prefix -> "online"|"capturing"|"idle"|"offline"
+_live_last_id: Dict[str, int]  = {}   # prefix -> latest image id signaled by camera
+_live_force_req_ts: Dict[str, float] = {}  # prefix -> last auto force_image request time
+_live_force_req_lock = threading.Lock()
 
 # SSE subscriber queues (live camera feed)
 _live_sse_queues: list = []
@@ -117,6 +123,25 @@ _live_sse_lock = threading.Lock()
 
 # MQTT client reference – set by _start_mqtt; used by Flask routes to publish
 _mqtt_client = None
+
+
+def _request_force_image(prefix: str, reason: str) -> bool:
+  """Ask camera to force-send next full JPEG when viewer has no cached live frame."""
+  if _mqtt_client is None:
+    return False
+
+  now = time.time()
+  with _live_force_req_lock:
+    last = _live_force_req_ts.get(prefix, 0.0)
+    if now - last < FORCE_IMAGE_REQUEST_COOLDOWN_S:
+      return False
+    _live_force_req_ts[prefix] = now
+
+  topic = f"{prefix}/cmd"
+  payload = json.dumps({"force_image": True})
+  _mqtt_client.publish(topic, payload, qos=0)
+  log.info("[%s] Requested force_image=true (%s)", prefix, reason)
+  return True
 
 
 def _store_live(prefix: str, jpeg: bytes):
@@ -363,6 +388,8 @@ def _on_connect(client, userdata, flags, rc):
         client.subscribe("+/+/image/data", 0)
         client.subscribe("+/image/end", 0)
         client.subscribe("+/+/image/end", 0)
+        client.subscribe("+/image/same", 0)
+        client.subscribe("+/+/image/same", 0)
         # Camera status topics
         client.subscribe("+/status", 0)
         client.subscribe("+/+/status", 0)
@@ -450,7 +477,7 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
                 log.info("[%s] Alert #%d stored (%d B, %d person(s))",
                          prefix, img_id, len(jpeg), alert.persons)
 
-        # ── raw camera image begin / data / end ──
+        # ── raw camera image begin / data / end / same ──
         # Topic format: <prefix>/image/<action>  (no "alert" segment)
         elif len(parts) >= 3 and parts[-2] == "image" and parts[-3] != "alert":
             prefix = "/".join(parts[:-2])   # e.g. "cam/01"
@@ -485,8 +512,64 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
                 if not buf.complete():
                     log.debug("[%s] Incomplete raw image #%d", prefix, img_id)
                     return
+                with _live_lock:
+                    _live_last_id[prefix] = img_id
                 _store_live(prefix, buf.assemble())
                 log.debug("[%s] Live frame #%d (%d B)", prefix, img_id, buf.chunks * CHUNK_SIZE)
+
+            elif action == "same":
+                meta = json.loads(msg.payload)
+                img_id = int(meta.get("id", 0))
+                same_as = int(meta.get("same_as", 0))
+                mode = str(meta.get("mode", "exact"))
+                score = meta.get("score")
+                ts = time.time()
+
+                with _live_lock:
+                    _live_ts[prefix] = ts
+                    if img_id > 0:
+                        _live_last_id[prefix] = img_id
+                    has_frame = prefix in _live_jpeg
+                    status = _live_status.get(prefix, "")
+
+                force_requested = False
+                if not has_frame:
+                    force_requested = _request_force_image(prefix, "no live frame in cache")
+
+                # Notify live dashboards even when no new JPEG is transmitted.
+                event_obj = {
+                    "camera": prefix,
+                    "ts": ts,
+                    "status": status,
+                    "same": True,
+                    "id": img_id,
+                    "same_as": same_as,
+                    "mode": mode,
+                    "force_request": force_requested,
+                }
+                if score is not None:
+                    event_obj["score"] = score
+
+                event = "data: " + json.dumps(event_obj) + "\n\n"
+                with _live_sse_lock:
+                    dead = []
+                    for q in _live_sse_queues:
+                        try:
+                            q.put_nowait(event)
+                        except queue.Full:
+                            dead.append(q)
+                    for q in dead:
+                        _live_sse_queues.remove(q)
+
+                if has_frame:
+                    if score is None:
+                        log.debug("[%s] Live frame #%d same as #%d (mode=%s)",
+                                  prefix, img_id, same_as, mode)
+                    else:
+                        log.debug("[%s] Live frame #%d same as #%d (mode=%s, score=%s)",
+                                  prefix, img_id, same_as, mode, score)
+                else:
+                    log.debug("[%s] Received image/same for #%d but no cached frame yet", prefix, img_id)
 
         # ── camera status ──
         elif action == "status" and len(parts) >= 2:
@@ -1006,6 +1089,8 @@ nav a:hover{text-decoration:underline}
 .s-idle{background:#1c1c1c;border:1px solid #30363d;color:#8b949e}
 .s-offline{background:#2d1111;border:1px solid #7f1d1d;color:#f85149}
 .s-unknown{background:#1c1c1c;border:1px solid #30363d;color:#484f58}
+.force-note{display:none;margin-top:.28em;font-size:.72em;color:#fbbf24;background:#3a2d09;border:1px solid #a16207;border-radius:4px;padding:.12em .45em;width:max-content}
+.force-note.show{display:inline-block}
 </style>
 </head>
 <body>
@@ -1032,6 +1117,7 @@ nav a:hover{text-decoration:underline}
 const grid = document.getElementById('grid');
 const dot  = document.getElementById('dot');
 const cards = {};
+const forceTimers = {};
 
 // Load existing cameras
 fetch('/api/live/latest').then(r=>r.json()).then(cams=>{
@@ -1043,7 +1129,7 @@ es.onmessage = e => {
   const d = JSON.parse(e.data);
   if (d.ts !== undefined) {
     const tsIso = new Date(d.ts * 1000).toISOString().replace('T',' ').replace('Z',' UTC');
-    updateCard(d.camera, tsIso, d.status);
+    updateCard(d.camera, tsIso, d.status, !!d.same, !!d.force_request);
   } else if (d.status !== undefined && cards[d.camera]) {
     updateStatus(cards[d.camera], d.status);
   }
@@ -1051,17 +1137,20 @@ es.onmessage = e => {
 es.onerror = () => { dot.style.background='#f85149'; };
 es.onopen  = () => { dot.style.background='#3fb950'; };
 
-function updateCard(camera, tsIso, status) {
+function updateCard(camera, tsIso, status, same=false, forceRequest=false) {
   const empty = document.getElementById('empty');
   if (empty) empty.remove();
 
   if (cards[camera]) {
-    // Refresh image by busting cache
-    const img = cards[camera].querySelector('img');
-    const url = '/api/live/image/' + camera + '?t=' + Date.now();
-    img.src = url;
+    if (!same) {
+      // Refresh image by busting cache only when we got a new JPEG payload.
+      const img = cards[camera].querySelector('img');
+      const url = '/api/live/image/' + camera + '?t=' + Date.now();
+      img.src = url;
+    }
     cards[camera].querySelector('.ts').textContent = tsIso || '';
     if (status !== undefined) updateStatus(cards[camera], status);
+    if (forceRequest) showForceIndicator(cards[camera], camera);
     return;
   }
 
@@ -1072,7 +1161,8 @@ function updateCard(camera, tsIso, status) {
     <img src="${url}" alt="${camera}" onerror="this.style.opacity='.3'">
     <div class="info">
       <b>${camera}</b><span class="status-badge s-unknown cam-status"></span><br>
-      <span class="ts">${tsIso || ''}</span>
+      <span class="ts">${tsIso || ''}</span><br>
+      <span class="force-note">Demanant imatge…</span>
     </div>
     <div class="ctrl" data-cam="${camera}">
       <div class="ctrl-row">
@@ -1094,6 +1184,18 @@ function updateCard(camera, tsIso, status) {
   cards[camera] = card;
   grid.appendChild(card);
   if (status !== undefined) updateStatus(card, status);
+  if (forceRequest) showForceIndicator(card, camera);
+}
+
+function showForceIndicator(card, camera) {
+  const el = card.querySelector('.force-note');
+  if (!el) return;
+  el.classList.add('show');
+  if (forceTimers[camera]) clearTimeout(forceTimers[camera]);
+  forceTimers[camera] = setTimeout(() => {
+    el.classList.remove('show');
+    delete forceTimers[camera];
+  }, 5000);
 }
 
 // ── Mostra l'estat de la càmera al badge ────────────────────────────────────
@@ -1203,6 +1305,7 @@ def api_cmd(prefix: str):
       {"cmd": "start"|"stop"}
       {"flash": "on"|"off"|"auto"}
       {"interval": <ms>}   1000 ≤ ms ≤ 3600000
+      {"force_image": true|false}
     """
     if _mqtt_client is None:
         return jsonify({"ok": False, "error": "MQTT not connected"}), 503
@@ -1225,6 +1328,9 @@ def api_cmd(prefix: str):
         if not (1000 <= ms <= 3600000):
             return jsonify({"ok": False, "error": "interval out of range (1000–3600000)"}), 400
         payload = json.dumps({"interval": ms})
+    elif "force_image" in data:
+      force = bool(data["force_image"])
+      payload = json.dumps({"force_image": force})
     else:
         return jsonify({"ok": False, "error": "unknown command"}), 400
     topic = f"{prefix}/cmd"

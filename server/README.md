@@ -97,11 +97,14 @@ automàticament al contenidor.
 | `CONFIDENCE` | `0.45` | Llindar de confiança de detecció (0.0–1.0) |
 | `CHUNK_SIZE` | `4096` | Mida del chunk en bytes (ha de coincidir amb la càmera) |
 | `STALE_TTL_S` | `60` | Descarta buffers d'imatge incomplets passats N segons |
+| `SAME_PERSON_ALERT_THRESHOLD` | `5` | Publica `<prefix>/alert/same` quan hi ha N `image/same` seguits després d'haver detectat persones |
+| `SAME_PERSON_ALERT_STEP` | `5` | Repetició de l'avís cada N nous `image/same` addicionals |
 | `LOG_LEVEL` | `INFO` | Nivell de log: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `MAX_ALERTS` | `50` | Màxim d'alertes en memòria RAM al viewer |
-| `PERSIST_DIR` | `/data/alerts` | Ruta dins del contenidor on es desen les imatges d'alerta (buit = desactivat) |
+| `PERSIST_DIR` | `/data/alerts` | Ruta dins del contenidor on es desen les imatges |
 | `MAX_DISK_ALERTS` | `500` | Número màxim d'imatges a conservar al disc |
-| `MAX_DISK_DAYS` | `7` | Dies màxim de retenció d'imatges al disc |
+| `MAX_DISK_DAYS` | `7` | Dies màxim de retenció d'imatges |
+| `ALERTS_DIR` | `/home/pi/camsec-alerts` | Carpeta del **host** on es munten les alertes (bind mount) |
 
 Per canviar qualsevol paràmetre edita `.env` i reinicia:
 
@@ -113,13 +116,33 @@ docker compose up -d
 
 ## Persistència d'alertes al disc
 
-El viewer desa cada imatge d'alerta al disc i recupera l'historial complet en reiniciar
-el contenidor. La persistència es desactiva si `PERSIST_DIR` és buit.
+El viewer desa cada imatge d'alerta en una carpeta del host i recupera l'historial
+complert en reiniciar el contenidor.
+
+### Directori de dades
+
+La variable `ALERTS_DIR` al fitxer `.env` defineix la carpeta del host:
+
+```dotenv
+ALERTS_DIR=/home/pi/camsec-alerts   # per defecte
+```
+
+Pot ser qualsevol ruta accessible, inclús un disc USB muntat:
+
+```dotenv
+ALERTS_DIR=/mnt/usb/camsec-alerts
+```
+
+Crea el directori si no existeix:
+
+```bash
+mkdir -p "$ALERTS_DIR"
+```
 
 ### Estructura de fitxers
 
 ```
-$PERSIST_DIR/   (= /data/alerts dins el contenidor)
+$ALERTS_DIR/
 ├── index.jsonl          # metadades de cada alerta (una línia JSON per entrada)
 └── images/
     ├── 1.jpg
@@ -133,15 +156,27 @@ Cada 10 alertes el viewer neteja les imatges antigues:
 - Elimina imatges de més de **`MAX_DISK_DAYS`** dies (per defecte 7).
 - Conserva com a màxim **`MAX_DISK_ALERTS`** imatges (per defecte 500).
 
+Per canviar els límits, edita el `.env`:
+
+```dotenv
+MAX_DISK_DAYS=14
+MAX_DISK_ALERTS=1000
+```
+
+I reinicia el viewer:
+
+```bash
+docker compose restart viewer
+```
+
 ---
 
 ## Dashboard i API HTTP
 
 Accedeix a **http://\<ip-servidor\>:8088**
 
-- **Vista principal** (`/`) — una targeta per càmera amb la darrera foto detectada (alertes amb detecció de persona).
-- **Directe** (`/live`) — última imatge rebuda de cada càmera en temps real, sense filtrar per detecció. Inclou controls per a cada càmera: **engegar/aturar** la captura, **flash** (Auto/On/Off), **interval** entre captures (ms) i **indicador d'estat** (Online/Capturant/Aturada/Offline).
-- **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (des del disc si la persistència és activa, altrament memòria RAM); clica una foto per veure-la a pantalla completa (lightbox); mostra l'ID de cada foto.
+- **Vista principal** — una targeta per càmera amb la darrera foto detectada.
+- **Historial** — clica qualsevol targeta per veure totes les fotos d'aquella càmera (llegeix del disc, no només de la RAM).
 - **Eliminar fotos** — botó 🗑️ a cada foto de l'historial per eliminar-la individualment; botó **Elimina totes** a la capçalera del modal per buidar tota la càmera.
 - **Temps real** — s'actualitza automàticament via Server-Sent Events (SSE) sense cal recarregar la pàgina.
 - **Embed** — panel mínim per incloure via `<iframe src="http://servidor:8088/embed">`.
@@ -152,18 +187,13 @@ Accedeix a **http://\<ip-servidor\>:8088**
 |---|---|---|
 | `GET` | `/api/alerts` | Llista d'alertes recents en memòria (JSON) |
 | `GET` | `/api/alerts/latest` | Darrera alerta per càmera (JSON) |
-| `GET` | `/api/alerts/camera/<prefix>` | Historial complet d'una càmera (des del disc si la persistència és activa) |
-| `DELETE` | `/api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera (memòria i disc) |
+| `GET` | `/api/alerts/camera/<prefix>` | Historial complet d'una càmera (des de disc) |
+| `DELETE` | `/api/alerts/camera/<prefix>` | Elimina totes les fotos d'una càmera (RAM + disc) |
 | `GET` | `/api/image/<id>` | Serveix el JPEG d'una alerta concreta |
-| `DELETE` | `/api/image/<id>` | Elimina una foto concreta (memòria i disc) |
+| `DELETE` | `/api/image/<id>` | Elimina una foto concreta (RAM + disc) |
 | `GET` | `/stream` | Server-Sent Events en temps real |
 | `GET` | `/embed` | Panel mínim per `<iframe>` |
-| `GET` | `/live` | Vista en directe de totes les càmeres (totes les imatges) |
-| `GET` | `/live/stream` | SSE en temps real de les imatges raw de les càmeres |
-| `GET` | `/api/live/latest` | Darrer frame per càmera (JSON) |
-| `GET` | `/api/live/image/<prefix>` | Últim JPEG en brut d'una càmera concreta |
-| `POST` | `/api/cmd/<prefix>` | Envia una comanda MQTT a la càmera: `{"cmd":"start\|stop"}`, `{"flash":"on\|off\|auto"}`, `{"interval":<ms>}` |
-| `GET` | `/help` | Pàgina web d'ajuda: endpoints disponibles i variables de configuració |
+| `GET` | `/help` | Documentació dels endpoints i variables de configuració (JSON) |
 
 ---
 
@@ -174,6 +204,9 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `<prefix>/image/begin` | JSON | Inici d'imatge: `{id, size, chunks, dark}` |
 | `<prefix>/image/data` | Binari | Chunk: `[4B id BE][2B idx BE][dades JPEG]` |
 | `<prefix>/image/end` | JSON | Fi d'imatge: `{id, chunks, ok}` |
+| `<prefix>/image/same` | JSON | Sense JPEG: `{id, same_as, size, dark, mode[, score]}` |
+
+Quan arriba `<prefix>/image/same`, el detector no executa inferència nova (no hi ha payload JPEG) i el viewer actualitza el timestamp/estat del directe reutilitzant l'últim frame disponible.
 
 ### Publicats en detecció
 
@@ -181,6 +214,7 @@ Accedeix a **http://\<ip-servidor\>:8088**
 |---|---|---|
 | `detector/status` | text | `online` / `offline` (retained) |
 | `<prefix>/alert` | JSON | Resum de la detecció |
+| `<prefix>/alert/same` | JSON | Avís: molts `image/same` seguits després d'una detecció de persones |
 | `<prefix>/alert/image/begin` | JSON | Inici d'imatge anotada |
 | `<prefix>/alert/image/data` | Binari | Chunk d'imatge anotada |
 | `<prefix>/alert/image/end` | JSON | Fi d'imatge anotada |
@@ -317,25 +351,24 @@ All variables are set in the `.env` file. `docker-compose.yml` passes them autom
 | `STALE_TTL_S` | `60` | Discard incomplete image buffers after N seconds |
 | `LOG_LEVEL` | `INFO` | Log level: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `MAX_ALERTS` | `50` | Maximum alerts kept in RAM by the viewer |
-| `PERSIST_DIR` | `/data/alerts` | Path inside the container to store alert images (empty = disabled) |
-| `MAX_DISK_ALERTS` | `500` | Maximum number of alert images to keep on disk |
-| `MAX_DISK_DAYS` | `7` | Maximum age of alert images in days |
+| `PERSIST_DIR` | `/data/alerts` | Path inside the container where images are stored |
+| `MAX_DISK_ALERTS` | `500` | Maximum number of images to keep on disk |
+| `MAX_DISK_DAYS` | `7` | Maximum retention period in days |
+| `ALERTS_DIR` | `/home/pi/camsec-alerts` | **Host** folder bind-mounted into the viewer container |
 
 ## Alert persistence
 
-The viewer saves each alert image to disk and restores the full history on container
-restart. Persistence is disabled when `PERSIST_DIR` is empty.
+The viewer saves every alert image to the host filesystem and restores the full history on container restart.
 
 ```
-$PERSIST_DIR/   (= /data/alerts inside the container)
+$ALERTS_DIR/
 ├── index.jsonl          # one JSON line per alert (metadata)
 └── images/
     ├── 1.jpg
     └── …
 ```
 
-Every 10 alerts the viewer prunes old images: removes files older than `MAX_DISK_DAYS`
-days and keeps at most `MAX_DISK_ALERTS` images.
+Every 10 alerts the viewer prunes old images: removes files older than `MAX_DISK_DAYS` days and keeps at most `MAX_DISK_ALERTS` images.
 
 ## Dashboard & REST API
 
@@ -345,18 +378,12 @@ Access at **http://\<server-ip\>:8088**
 |---|---|---|
 | `GET` | `/api/alerts` | Recent alerts in memory (JSON) |
 | `GET` | `/api/alerts/latest` | Latest alert per camera (JSON) |
-| `GET` | `/api/alerts/camera/<prefix>` | Full camera history (disk if persistence is active) |
+| `GET` | `/api/alerts/camera/<prefix>` | Full camera history (from disk) |
 | `DELETE` | `/api/alerts/camera/<prefix>` | Delete all photos for a camera (RAM + disk) |
 | `GET` | `/api/image/<id>` | Serve a JPEG alert image |
 | `DELETE` | `/api/image/<id>` | Delete a specific photo (RAM + disk) |
 | `GET` | `/stream` | Server-Sent Events real-time stream |
 | `GET` | `/embed` | Minimal panel for `<iframe>` embedding |
-| `GET` | `/live` | Live view of all cameras (all frames, not just alerts) |
-| `GET` | `/live/stream` | SSE real-time stream of raw camera frames |
-| `GET` | `/api/live/latest` | Latest frame per camera (JSON) |
-| `GET` | `/api/live/image/<prefix>` | Latest raw JPEG for a specific camera |
-| `POST` | `/api/cmd/<prefix>` | Publish an MQTT command to a camera: `{"cmd":"start\|stop"}`, `{"flash":"on\|off\|auto"}`, `{"interval":<ms>}` |
-| `GET` | `/help` | Web help page: available endpoints and configuration variables |
 
 ## MQTT topics
 
@@ -367,6 +394,9 @@ Access at **http://\<server-ip\>:8088**
 | `<prefix>/image/begin` | JSON | Image start: `{id, size, chunks, dark}` |
 | `<prefix>/image/data` | Binary | Chunk: `[4B id BE][2B idx BE][JPEG data]` |
 | `<prefix>/image/end` | JSON | Image end: `{id, chunks, ok}` |
+| `<prefix>/image/same` | JSON | No JPEG payload: `{id, same_as, size, dark, mode[, score]}` |
+
+When `<prefix>/image/same` arrives, the detector skips a new inference (no JPEG payload) and the viewer refreshes live timestamp/status while reusing the latest cached frame.
 
 ### Published on detection
 
@@ -374,6 +404,7 @@ Access at **http://\<server-ip\>:8088**
 |---|---|---|
 | `detector/status` | text | `online` / `offline` (retained) |
 | `<prefix>/alert` | JSON | Detection summary |
+| `<prefix>/alert/same` | JSON | Warning: many consecutive `image/same` events after a person detection |
 | `<prefix>/alert/image/begin` | JSON | Start of annotated image |
 | `<prefix>/alert/image/data` | Binary | Annotated image chunk |
 | `<prefix>/alert/image/end` | JSON | End of annotated image |

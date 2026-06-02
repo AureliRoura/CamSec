@@ -9,6 +9,7 @@ Topics consumed (per camera prefix, e.g. "cam/01"):
   <prefix>/image/begin  – JSON {id, size, chunks, dark}
   <prefix>/image/data   – Binary [4B id BE][2B chunk_idx BE][JPEG data]
   <prefix>/image/end    – JSON {id, chunks, ok}
+    <prefix>/image/same   – JSON {id, same_as, size, dark, mode[, score]}
 
 Topics published on detection:
   <prefix>/alert                – JSON summary (see AlertSummary below)
@@ -18,6 +19,10 @@ Topics published on detection:
 
 Global status:
   detector/status               – "online" | "offline" (retained)
+
+Additional same-streak alert topic:
+    <prefix>/alert/same           – JSON warning when many consecutive image/same
+                                                                    events happen after a person detection.
 """
 
 import os
@@ -48,6 +53,8 @@ YOLO_IMGSZ   = int(os.getenv("YOLO_IMGSZ",   "640"))
 CHUNK_SIZE   = int(os.getenv("CHUNK_SIZE",   "4096"))
 STALE_TTL_S  = float(os.getenv("STALE_TTL_S",  "60.0"))
 LOG_LEVEL    = os.getenv("LOG_LEVEL",    "INFO")
+SAME_PERSON_ALERT_THRESHOLD = int(os.getenv("SAME_PERSON_ALERT_THRESHOLD", "5"))
+SAME_PERSON_ALERT_STEP      = int(os.getenv("SAME_PERSON_ALERT_STEP", "5"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -81,9 +88,117 @@ class ImageBuffer:
 # Active image buffers keyed by (prefix, image_id)
 _buffers: Dict[Tuple[str, int], ImageBuffer] = {}
 
+
+@dataclass
+class SameStreakState:
+    # Last image where detector confirmed persons for this camera.
+    last_person_image_id: int = 0
+    last_person_count: int = 0
+    # Current same streak tracking.
+    same_ref_image_id: int = 0
+    same_streak: int = 0
+    last_same_image_id: int = 0
+    # Avoid duplicate warning at the same streak length.
+    last_warned_streak: int = 0
+
+
+_same_state: Dict[str, SameStreakState] = defaultdict(SameStreakState)
+
 # YOLO model and MQTT client (initialised in main())
 _model:  Optional[YOLO]         = None
 _client: Optional[mqtt.Client]  = None
+
+
+def _reset_same_state(prefix: str):
+    st = _same_state[prefix]
+    st.same_ref_image_id = 0
+    st.same_streak = 0
+    st.last_same_image_id = 0
+    st.last_warned_streak = 0
+
+
+def _note_person_detection(prefix: str, image_id: int, persons: int):
+    st = _same_state[prefix]
+    st.last_person_image_id = image_id
+    st.last_person_count = persons
+    # New real detection starts a fresh same streak window.
+    st.same_ref_image_id = 0
+    st.same_streak = 0
+    st.last_same_image_id = 0
+    st.last_warned_streak = 0
+
+
+def _note_no_person_detection(prefix: str):
+    st = _same_state[prefix]
+    st.last_person_image_id = 0
+    st.last_person_count = 0
+    _reset_same_state(prefix)
+
+
+def _publish_same_streak_alert(prefix: str, image_id: int, same_as: int,
+                               mode: str, score, streak: int, persons: int):
+    ts = time.time()
+    payload = {
+        "camera": prefix,
+        "type": "same_person_streak",
+        "image_id": image_id,
+        "same_as": same_as,
+        "mode": mode,
+        "score": score,
+        "same_streak": streak,
+        "persons_last_detected": persons,
+        "threshold": SAME_PERSON_ALERT_THRESHOLD,
+        "ts": round(ts, 3),
+        "ts_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+    }
+    _client.publish(f"{prefix}/alert/same", json.dumps(payload).encode(), retain=False)
+    log.warning("[%s] SAME streak=%d after person detection (last persons=%d, image #%d same_as #%d, mode=%s)",
+                prefix, streak, persons, image_id, same_as, mode)
+
+
+def _handle_same_event(prefix: str, meta: dict):
+    image_id = int(meta.get("id", 0))
+    same_as = int(meta.get("same_as", 0))
+    mode = str(meta.get("mode", "exact"))
+    score = meta.get("score")
+
+    st = _same_state[prefix]
+
+    # Ignore reordered/duplicate same events.
+    if image_id > 0 and image_id <= st.last_same_image_id:
+        return
+    st.last_same_image_id = image_id
+
+    # Only meaningful if persons were detected on a recent real image.
+    if st.last_person_image_id <= 0 or st.last_person_count <= 0:
+        return
+    if same_as < st.last_person_image_id:
+        return
+
+    if st.same_ref_image_id != same_as:
+        st.same_ref_image_id = same_as
+        st.same_streak = 1
+        st.last_warned_streak = 0
+    else:
+        st.same_streak += 1
+
+    if st.same_streak < SAME_PERSON_ALERT_THRESHOLD:
+        return
+
+    step = SAME_PERSON_ALERT_STEP if SAME_PERSON_ALERT_STEP > 0 else SAME_PERSON_ALERT_THRESHOLD
+    if st.last_warned_streak and (st.same_streak - st.last_warned_streak) < step:
+        return
+
+    st.last_warned_streak = st.same_streak
+    _publish_same_streak_alert(
+        prefix=prefix,
+        image_id=image_id,
+        same_as=same_as,
+        mode=mode,
+        score=score,
+        streak=st.same_streak,
+        persons=st.last_person_count,
+    )
 
 
 # ─── Detection ────────────────────────────────────────────────────────────────
@@ -217,7 +332,10 @@ def _process_image(prefix: str, buf: ImageBuffer):
     log.debug("[%s] Image #%d – %d person(s)", prefix, buf.image_id, len(detections))
 
     if detections:
+        _note_person_detection(prefix, buf.image_id, len(detections))
         _publish_alert(buf, img, detections)
+    else:
+        _note_no_person_detection(prefix)
 
     # Free memory explicitly (important on low-RAM devices like Raspberry Pi)
     del img, detections, jpeg
@@ -244,16 +362,16 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
     topic  = msg.topic
     parts  = topic.split("/")
 
-    # We only care about topics ending in .../image/begin|data|end
+    # We only care about topics ending in .../image/begin|data|end|same
     # Ignore our own alert topics to avoid loops
     if len(parts) < 3:
         return
     if "alert" in parts:
         return
 
-    action = parts[-1]   # begin | data | end
+    action = parts[-1]   # begin | data | end | same
     sub    = parts[-2]   # must be "image"
-    if sub != "image" or action not in ("begin", "data", "end"):
+    if sub != "image" or action not in ("begin", "data", "end", "same"):
         return
 
     prefix = "/".join(parts[:-2])  # e.g. "cam/01"
@@ -297,6 +415,20 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
                 log.warning("[%s] Incomplete image #%d: %d/%d chunks",
                             prefix, buf.image_id,
                             len(buf.chunks), buf.total_chunks)
+
+        elif action == "same":
+            meta = json.loads(msg.payload)
+            image_id = int(meta.get("id", 0))
+            same_as = int(meta.get("same_as", 0))
+            mode = str(meta.get("mode", "exact"))
+            score = meta.get("score")
+            if score is None:
+                log.debug("[%s] Image #%d marked same as #%d (mode=%s)",
+                          prefix, image_id, same_as, mode)
+            else:
+                log.debug("[%s] Image #%d marked same as #%d (mode=%s, score=%s)",
+                          prefix, image_id, same_as, mode, score)
+            _handle_same_event(prefix, meta)
 
     except Exception:
         log.exception("Error processing topic '%s'", topic)

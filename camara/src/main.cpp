@@ -12,11 +12,13 @@
 //   Subscribe : <prefix>/cmd          – "start" | "stop"
 //                                      | {"flash":"on"|"off"|"auto"}  (valor insensible a majúscules)
 //                                      | {"interval":<ms>}             (1000–3 600 000 ms)
+//                                      | {"force_image":true|false}   (force next full JPEG upload)
 //   Publish   : <prefix>/ack           – JSON: {ok, cmd|flash|interval[, error]}
 //   Publish   : <prefix>/status       – "online" | "capturing" | "idle" | "offline"
 //   Publish   : <prefix>/image/begin  – JSON: {id, size, chunks, dark}
 //   Publish   : <prefix>/image/data   – Binary: [4B img_id BE][2B chunk_idx BE][data]
 //   Publish   : <prefix>/image/end    – JSON: {id, chunks, ok}
+//   Publish   : <prefix>/image/same   – JSON: {id, same_as, size, dark}
 // =============================================================================
 
 #include <Arduino.h>
@@ -60,6 +62,13 @@
 #define WIFI_MAX_TRIES          40  // Attempts before giving up (×500 ms each)
 #define MQTT_RECONNECT_MS     5000  // Delay between reconnect attempts
 #define MQTT_KEEPALIVE_S        60  // MQTT keep-alive interval
+#define QUASI_SAMPLES           64  // Sample points used for tolerant similarity check
+#define QUASI_MAX_LEN_DIFF_PCT   6  // Max % size drift to still consider quasi-equal
+#define QUASI_MAX_SCORE        300  // Sum(abs(sample_delta)); lower = stricter
+
+struct FrameSketch {
+    uint8_t q[QUASI_SAMPLES];
+};
 
 // ─── Application globals ─────────────────────────────────────────────────────
 AppConfig    cfg;
@@ -73,6 +82,12 @@ uint32_t      imageId         = 0;
 unsigned long lastCapture     = 0;
 bool          flashOverride   = false;  // true = manual flash control
 bool          flashOverrideOn = false;  // effective value when override active
+bool          forceNextUpload = false;  // one-shot bypass of dedup logic
+uint32_t      lastSentHash    = 0;      // Fingerprint of last image sent in full
+uint32_t      lastSentLen     = 0;      // Length of last image sent in full
+uint32_t      lastSentImageId = 0;      // ID of last image sent in full
+FrameSketch   lastSentSketch  = {};
+bool          hasLastSent     = false;
 
 // Pre-built topic strings (assembled in buildTopics())
 static char topicCmd[96];
@@ -80,6 +95,7 @@ static char topicStatus[96];
 static char topicBegin[96];
 static char topicData[96];
 static char topicEnd[96];
+static char topicSame[96];
 static char topicAck[96];
 
 // ─── Config persistence ───────────────────────────────────────────────────────
@@ -243,12 +259,61 @@ static void buildTopics() {
     snprintf(topicBegin,  sizeof(topicBegin),  "%s/image/begin", cfg.mqtt_prefix);
     snprintf(topicData,   sizeof(topicData),   "%s/image/data",  cfg.mqtt_prefix);
     snprintf(topicEnd,    sizeof(topicEnd),    "%s/image/end",   cfg.mqtt_prefix);
+    snprintf(topicSame,   sizeof(topicSame),   "%s/image/same",  cfg.mqtt_prefix);
     snprintf(topicAck,    sizeof(topicAck),    "%s/ack",         cfg.mqtt_prefix);
     Serial.printf("[MQTT] Topics prefix: %s\n", cfg.mqtt_prefix);
 }
 
+// Fast 32-bit FNV-1a hash for frame deduplication without storing previous JPEG.
+static uint32_t frameFingerprint(const uint8_t* data, size_t len) {
+    uint32_t h = 2166136261UL;
+    for (size_t i = 0; i < len; ++i) {
+        h ^= data[i];
+        h *= 16777619UL;
+    }
+    return h;
+}
+
+static void buildFrameSketch(const uint8_t* data, uint32_t len, FrameSketch* out) {
+    if (len == 0) {
+        memset(out->q, 0, sizeof(out->q));
+        return;
+    }
+
+    for (uint32_t i = 0; i < QUASI_SAMPLES; ++i) {
+        uint32_t idx = (uint32_t)(((uint64_t)i * (uint64_t)(len - 1)) / (QUASI_SAMPLES - 1));
+        out->q[i] = (uint8_t)(data[idx] >> 4);  // 4-bit quantisation reduces sensitivity to tiny noise
+    }
+}
+
+static uint32_t sketchDistance(const FrameSketch* a, const FrameSketch* b) {
+    uint32_t score = 0;
+    for (uint32_t i = 0; i < QUASI_SAMPLES; ++i) {
+        int d = (int)a->q[i] - (int)b->q[i];
+        score += (uint32_t)(d < 0 ? -d : d);
+    }
+    return score;
+}
+
+static bool isQuasiEqual(uint32_t lenA, const FrameSketch* a,
+                         uint32_t lenB, const FrameSketch* b,
+                         uint32_t* outScore) {
+    uint32_t base = (lenA > lenB) ? lenA : lenB;
+    uint32_t diff = (lenA > lenB) ? (lenA - lenB) : (lenB - lenA);
+    uint32_t maxLenDiff = (base * QUASI_MAX_LEN_DIFF_PCT) / 100;
+    if (maxLenDiff < 512) maxLenDiff = 512;  // Allow small absolute drift for JPEG entropy changes
+    if (diff > maxLenDiff) {
+        if (outScore) *outScore = 0xFFFFFFFFUL;
+        return false;
+    }
+
+    uint32_t score = sketchDistance(a, b);
+    if (outScore) *outScore = score;
+    return score <= QUASI_MAX_SCORE;
+}
+
 static void mqttCallback(char* topic, byte* payload, unsigned int len) {
-    // Buffer: longest expected message is {"interval":3600000} = 20 chars
+    // Buffer: longest expected message is {"interval":3600000} / {"force_image":true}
     char msg[48] = {0};
     memcpy(msg, payload, min(len, (unsigned int)(sizeof(msg) - 1)));
 
@@ -320,6 +385,27 @@ static void mqttCallback(char* topic, byte* payload, unsigned int len) {
         } else {
             snprintf(ack, sizeof(ack), "{\"ok\":false,\"error\":\"malformed interval command\"}");
         }
+    } else if (strstr(msg, "\"force_image\"")) {
+        // JSON force-image command: {"force_image":true|false}
+        const char* colon = strchr(msg, ':');
+        if (!colon) {
+            snprintf(ack, sizeof(ack), "{\"ok\":false,\"error\":\"malformed force_image command\"}");
+        } else {
+            const char* p = colon + 1;
+            while (*p == ' ' || *p == '\t' || *p == '"') p++;
+            if (strncmp(p, "true", 4) == 0 || *p == '1') {
+                forceNextUpload = true;
+                Serial.println("[MQTT] force_image=true (next capture will send full JPEG)");
+                snprintf(ack, sizeof(ack), "{\"ok\":true,\"force_image\":true}");
+            } else if (strncmp(p, "false", 5) == 0 || *p == '0') {
+                forceNextUpload = false;
+                Serial.println("[MQTT] force_image=false (force flag cleared)");
+                snprintf(ack, sizeof(ack), "{\"ok\":true,\"force_image\":false}");
+            } else {
+                snprintf(ack, sizeof(ack),
+                         "{\"ok\":false,\"error\":\"force_image must be true/false\"}");
+            }
+        }
     } else {
         Serial.printf("[MQTT] Unknown command: \"%s\"\n", msg);
         snprintf(ack, sizeof(ack), "{\"ok\":false,\"error\":\"unknown command\"}");
@@ -384,6 +470,41 @@ static void captureAndSend() {
     uint32_t totalLen  = (uint32_t)fb->len;
     uint16_t numChunks = (uint16_t)((totalLen + CHUNK_SIZE - 1) / CHUNK_SIZE);
     uint32_t id        = ++imageId;
+    uint32_t hash      = frameFingerprint(fb->buf, totalLen);
+    FrameSketch sketch;
+    buildFrameSketch(fb->buf, totalLen, &sketch);
+    uint32_t quasiScore = 0;
+    bool forceSend = forceNextUpload;
+    forceNextUpload = false;  // one-shot semantics
+
+    if (!forceSend && hasLastSent && totalLen == lastSentLen && hash == lastSentHash) {
+        char sameBuf[160];
+        snprintf(sameBuf, sizeof(sameBuf),
+                 "{\"id\":%u,\"same_as\":%u,\"size\":%u,\"dark\":%d,\"mode\":\"exact\"}",
+                 id, lastSentImageId, totalLen, dark ? 1 : 0);
+        mqtt.publish(topicSame, (uint8_t*)sameBuf, strlen(sameBuf), /*retain=*/false);
+
+        esp_camera_fb_return(fb);
+        Serial.printf("[Image] #%u same as #%u (exact) -> skipped payload\n", id, lastSentImageId);
+        return;
+    }
+
+    if (!forceSend && hasLastSent && isQuasiEqual(totalLen, &sketch, lastSentLen, &lastSentSketch, &quasiScore)) {
+        char sameBuf[192];
+        snprintf(sameBuf, sizeof(sameBuf),
+                 "{\"id\":%u,\"same_as\":%u,\"size\":%u,\"dark\":%d,\"mode\":\"quasi\",\"score\":%u}",
+                 id, lastSentImageId, totalLen, dark ? 1 : 0, quasiScore);
+        mqtt.publish(topicSame, (uint8_t*)sameBuf, strlen(sameBuf), /*retain=*/false);
+
+        esp_camera_fb_return(fb);
+        Serial.printf("[Image] #%u quasi-same as #%u (score=%u) -> skipped payload\n",
+                      id, lastSentImageId, quasiScore);
+        return;
+    }
+
+    if (forceSend) {
+        Serial.printf("[Image] #%u forced full upload (dedup bypassed)\n", id);
+    }
 
     Serial.printf("[Image] #%u  size=%u B  chunks=%u  dark=%d\n",
                   id, totalLen, numChunks, (int)dark);
@@ -431,6 +552,14 @@ static void captureAndSend() {
              "{\"id\":%u,\"chunks\":%u,\"ok\":%d}",
              id, numChunks, sendOk ? 1 : 0);
     mqtt.publish(topicEnd, (uint8_t*)jsonBuf, strlen(jsonBuf), /*retain=*/false);
+
+    if (sendOk) {
+        lastSentHash    = hash;
+        lastSentLen     = totalLen;
+        lastSentImageId = id;
+        lastSentSketch  = sketch;
+        hasLastSent     = true;
+    }
 
     esp_camera_fb_return(fb);
     Serial.printf("[Image] #%u %s\n", id, sendOk ? "sent OK" : "FAILED");
