@@ -34,8 +34,8 @@ services:
       # Set MQTT_BROKER to the IP or hostname of the existing broker.
       # If the broker runs in another Docker network use its container name
       # and add that network under 'networks:' below.
-      MQTT_BROKER:  ${MQTT_BROKER:-localhost}
-      MQTT_PORT:    ${MQTT_PORT:-1883}
+      MQTT_BROKER:  ${CAMSEC_MQTT_BROKER:-localhost}
+      MQTT_PORT:    ${CAMSEC_MQTT_PORT:-1883}
       MQTT_USER:    ${DETECTOR_MQTT_USER:-}
       MQTT_PASS:    ${DETECTOR_MQTT_PASS:-}
       MQTT_CLIENT:  camsec-detector
@@ -49,7 +49,7 @@ services:
       STALE_TTL_S:  "60"        # Discard incomplete image buffers after N seconds
       SAME_PERSON_ALERT_THRESHOLD: ${SAME_PERSON_ALERT_THRESHOLD:-5}  # warn after N consecutive image/same
       SAME_PERSON_ALERT_STEP:      ${SAME_PERSON_ALERT_STEP:-5}       # repeat warning every N additional same events
-      LOG_LEVEL:    INFO        # DEBUG | INFO | WARNING | ERROR
+      LOG_LEVEL:    ${DETECTOR_LOG_LEVEL:-INFO}  # DEBUG | INFO | WARNING | ERROR
       YOLO_IMGSZ:   "320"       # Resize input to this before inference (saves RAM on Pi)
     volumes:
       # Cache the YOLOv8 weights across container restarts
@@ -69,8 +69,8 @@ services:
     container_name: camsec-viewer
     restart: unless-stopped
     environment:
-      MQTT_BROKER:  ${MQTT_BROKER:-localhost}
-      MQTT_PORT:    ${MQTT_PORT:-1883}
+      MQTT_BROKER:  ${CAMSEC_MQTT_BROKER:-localhost}
+      MQTT_PORT:    ${CAMSEC_MQTT_PORT:-1883}
       MQTT_USER:    ${VIEWER_MQTT_USER:-}
       MQTT_PASS:    ${VIEWER_MQTT_PASS:-}
       MQTT_CLIENT:  camsec-viewer
@@ -78,7 +78,7 @@ services:
       MAX_ALERTS:   "50"       # max images kept in memory
       HTTP_HOST:    "0.0.0.0"
       HTTP_PORT:    "8088"
-      LOG_LEVEL:    INFO
+      LOG_LEVEL:    ${VIEWER_LOG_LEVEL:-INFO}
       PERSIST_DIR:     /data/alerts   # directory for persisted alert images
       MAX_DISK_ALERTS: "500"          # max images to keep on disk
       MAX_DISK_DAYS:   "7"            # max days to keep images

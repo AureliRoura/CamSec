@@ -97,14 +97,18 @@ cp .env.example .env
 Edita `.env` amb la IP del servidor on corre el broker MQTT:
 
 ```env
-MQTT_BROKER=192.168.1.10   # IP del teu servidor / màquina actual
-MQTT_PORT=1883
+CAMSEC_MQTT_BROKER=192.168.1.10   # IP del teu servidor / màquina actual
+CAMSEC_MQTT_PORT=1883
 
 # Deixa buit si el broker no requereix autenticació
 DETECTOR_MQTT_USER=
 DETECTOR_MQTT_PASS=
 VIEWER_MQTT_USER=
 VIEWER_MQTT_PASS=
+
+# Nivell de logs per servei
+DETECTOR_LOG_LEVEL=INFO
+VIEWER_LOG_LEVEL=INFO
 ```
 
 > Si el broker Mosquitto corre al **mateix ordinador** que Docker, usa la IP local de la interfície de xarxa (no `127.0.0.1`), per exemple `192.168.1.10`.

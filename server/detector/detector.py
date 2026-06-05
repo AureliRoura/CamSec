@@ -332,6 +332,8 @@ def _process_image(prefix: str, buf: ImageBuffer):
     log.debug("[%s] Image #%d – %d person(s)", prefix, buf.image_id, len(detections))
 
     if detections:
+        log.info("[%s] Person detected on image #%d (%d person(s))",
+                 prefix, buf.image_id, len(detections))
         _note_person_detection(prefix, buf.image_id, len(detections))
         _publish_alert(buf, img, detections)
     else:
@@ -410,6 +412,8 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
             if buf is None:
                 return
             if buf.is_complete():
+                log.info("[%s] Recovered image #%d (%d chunks, %d B, dark=%s)",
+                         prefix, buf.image_id, buf.total_chunks, buf.size, int(buf.dark))
                 _process_image(prefix, buf)
             else:
                 log.warning("[%s] Incomplete image #%d: %d/%d chunks",
@@ -422,6 +426,12 @@ def _on_message(client, userdata, msg: mqtt.MQTTMessage):
             same_as = int(meta.get("same_as", 0))
             mode = str(meta.get("mode", "exact"))
             score = meta.get("score")
+            if score is None:
+                log.info("[%s] Image #%d marked same as #%d (mode=%s)",
+                         prefix, image_id, same_as, mode)
+            else:
+                log.info("[%s] Image #%d marked same as #%d (mode=%s, score=%s)",
+                         prefix, image_id, same_as, mode, score)
             if score is None:
                 log.debug("[%s] Image #%d marked same as #%d (mode=%s)",
                           prefix, image_id, same_as, mode)

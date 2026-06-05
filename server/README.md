@@ -49,12 +49,16 @@ Edita `.env` amb els valors del teu entorn:
 
 ```dotenv
 # IP o hostname del broker MQTT extern
-MQTT_BROKER=192.168.1.10
-MQTT_PORT=1883
+CAMSEC_MQTT_BROKER=192.168.1.10
+CAMSEC_MQTT_PORT=1883
 
 # Credencials MQTT (deixa buit si el broker és anònim)
 DETECTOR_MQTT_USER=
 DETECTOR_MQTT_PASS=
+
+# Nivell de logs per servei
+DETECTOR_LOG_LEVEL=INFO
+VIEWER_LOG_LEVEL=INFO
 ```
 
 ### 2. Construeix i aixeca el contenidor
@@ -86,12 +90,14 @@ automàticament al contenidor.
 
 | Variable | Valor per defecte | Descripció |
 |---|---|---|
-| `MQTT_BROKER` | `localhost` | IP o hostname del broker |
-| `MQTT_PORT` | `1883` | Port TCP del broker |
+| `CAMSEC_MQTT_BROKER` | `localhost` | IP o hostname del broker |
+| `CAMSEC_MQTT_PORT` | `1883` | Port TCP del broker |
 | `DETECTOR_MQTT_USER` | *(buit)* | Usuari MQTT del detector (opcional) |
 | `DETECTOR_MQTT_PASS` | *(buit)* | Contrasenya MQTT del detector (opcional) |
 | `VIEWER_MQTT_USER` | *(buit)* | Usuari MQTT del viewer (opcional) |
 | `VIEWER_MQTT_PASS` | *(buit)* | Contrasenya MQTT del viewer (opcional) |
+| `DETECTOR_LOG_LEVEL` | `INFO` | Nivell de log del detector: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
+| `VIEWER_LOG_LEVEL` | `INFO` | Nivell de log del viewer: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `YOLO_MODEL` | `/models/yolov8n.pt` | Model YOLO: `n`=nano · `s`=small · `m`=medium |
 | `YOLO_IMGSZ` | `320` | Mida d'entrada al model (px); valors més petits → menys RAM |
 | `CONFIDENCE` | `0.45` | Llindar de confiança de detecció (0.0–1.0) |
@@ -99,7 +105,6 @@ automàticament al contenidor.
 | `STALE_TTL_S` | `60` | Descarta buffers d'imatge incomplets passats N segons |
 | `SAME_PERSON_ALERT_THRESHOLD` | `5` | Publica `<prefix>/alert/same` quan hi ha N `image/same` seguits després d'haver detectat persones |
 | `SAME_PERSON_ALERT_STEP` | `5` | Repetició de l'avís cada N nous `image/same` addicionals |
-| `LOG_LEVEL` | `INFO` | Nivell de log: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `MAX_ALERTS` | `50` | Màxim d'alertes en memòria RAM al viewer |
 | `PERSIST_DIR` | `/data/alerts` | Ruta dins del contenidor on es desen les imatges |
 | `MAX_DISK_ALERTS` | `500` | Número màxim d'imatges a conservar al disc |
@@ -241,7 +246,7 @@ Quan arriba `<prefix>/image/same`, el detector no executa inferència nova (no h
 El detector es connecta al broker via la xarxa física del host
 (`network_mode: host`), sense cap xarxa Docker interna.
 
-| Situació del broker | `MQTT_BROKER` |
+| Situació del broker | `CAMSEC_MQTT_BROKER` |
 |---|---|
 | Servidor remot | `192.168.1.10` (IP de la màquina) |
 | Mateix host, fora de Docker | `127.0.0.1` |
@@ -338,18 +343,19 @@ All variables are set in the `.env` file. `docker-compose.yml` passes them autom
 
 | Variable | Default | Description |
 |---|---|---|
-| `MQTT_BROKER` | `localhost` | IP or hostname of the broker |
-| `MQTT_PORT` | `1883` | TCP port of the broker |
+| `CAMSEC_MQTT_BROKER` | `localhost` | IP or hostname of the broker |
+| `CAMSEC_MQTT_PORT` | `1883` | TCP port of the broker |
 | `DETECTOR_MQTT_USER` | *(empty)* | MQTT username for the detector (optional) |
 | `DETECTOR_MQTT_PASS` | *(empty)* | MQTT password for the detector (optional) |
 | `VIEWER_MQTT_USER` | *(empty)* | MQTT username for the viewer (optional) |
 | `VIEWER_MQTT_PASS` | *(empty)* | MQTT password for the viewer (optional) |
+| `DETECTOR_LOG_LEVEL` | `INFO` | Detector log level: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
+| `VIEWER_LOG_LEVEL` | `INFO` | Viewer log level: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `YOLO_MODEL` | `/models/yolov8n.pt` | YOLO model: `n`=nano · `s`=small · `m`=medium |
 | `YOLO_IMGSZ` | `320` | Model input size (px); smaller → less RAM |
 | `CONFIDENCE` | `0.45` | Detection confidence threshold (0.0–1.0) |
 | `CHUNK_SIZE` | `4096` | Chunk size in bytes (must match the camera firmware) |
 | `STALE_TTL_S` | `60` | Discard incomplete image buffers after N seconds |
-| `LOG_LEVEL` | `INFO` | Log level: `DEBUG` · `INFO` · `WARNING` · `ERROR` |
 | `MAX_ALERTS` | `50` | Maximum alerts kept in RAM by the viewer |
 | `PERSIST_DIR` | `/data/alerts` | Path inside the container where images are stored |
 | `MAX_DISK_ALERTS` | `500` | Maximum number of images to keep on disk |
