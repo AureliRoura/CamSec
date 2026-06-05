@@ -64,7 +64,7 @@
 #define MQTT_KEEPALIVE_S        60  // MQTT keep-alive interval
 #define QUASI_SAMPLES           64  // Sample points used for tolerant similarity check
 #define QUASI_MAX_LEN_DIFF_PCT   6  // Max % size drift to still consider quasi-equal
-#define QUASI_MAX_SCORE        300  // Sum(abs(sample_delta)); lower = stricter
+#define QUASI_MAX_SCORE        320  // Sum(abs(sample_delta)); lower = stricter
 
 struct FrameSketch {
     uint8_t q[QUASI_SAMPLES];
