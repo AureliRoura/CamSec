@@ -55,12 +55,15 @@ services:
       # Cache the YOLOv8 weights across container restarts
       - yolo-cache:/root/.config/Ultralytics
       - yolo-models:/models
-    # Uses the host network stack – the container sees the same interfaces and
-    # routes as the host machine, so it reaches the MQTT broker at MQTT_BROKER
-    # exactly as any other process on this server would.
-    network_mode: host
+    # network_mode: host  — Linux only. On Windows/macOS Docker Desktop use the
+    # default bridge network; broker at a LAN IP is reachable either way.
     mem_limit: "900m"
     memswap_limit: "2g"
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-100k}"
+        max-file: "${LOG_MAX_FILES:-5}"
 
   # ── Alert Viewer ─────────────────────────────────────────────────────────────
   viewer:
@@ -84,15 +87,19 @@ services:
       MAX_DISK_DAYS:   "7"            # max days to keep images
     volumes:
       - ${ALERTS_DIR:-/home/pi/camsec-alerts}:/data/alerts
-    # network_mode:host lets the viewer reach the broker via any host interface
-    # (including 127.0.0.1) on Linux. On Windows/macOS Docker Desktop it must
-    # be commented out and the ports block below must be enabled instead.
+    # network_mode: host  — Linux only. On Windows/macOS Docker Desktop use
+    # the ports mapping below instead.
     #
-    # Linux   → keep network_mode: host (and leave ports commented)
-    # Windows → comment network_mode and uncomment ports
-    network_mode: host
-    # ports:                                   # Only needed on Windows/macOS (no network_mode: host)
-    #   - "${VIEWER_HTTP_PORT:-8088}:${VIEWER_HTTP_PORT:-8088}"
+    # Linux   → uncomment network_mode and comment the ports block
+    # Windows → keep ports (current)
+    # network_mode: host
+    ports:
+      - "${VIEWER_HTTP_PORT:-8088}:${VIEWER_HTTP_PORT:-8088}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-100k}"
+        max-file: "${LOG_MAX_FILES:-5}"
 
 # ── Volumes ───────────────────────────────────────────────────────────────────
 volumes:
