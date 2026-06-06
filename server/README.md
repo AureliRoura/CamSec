@@ -243,7 +243,7 @@ Quan arriba `<prefix>/image/same`, el detector no executa inferència nova (no h
 
 ## Broker MQTT
 
-El detector es connecta al broker via la xarxa física del host
+Tant el detector com el viewer es connecten al broker via la xarxa física del host
 (`network_mode: host`), sense cap xarxa Docker interna.
 
 | Situació del broker | `CAMSEC_MQTT_BROKER` |
@@ -253,7 +253,10 @@ El detector es connecta al broker via la xarxa física del host
 | Mateix host, en Docker | `127.0.0.1` (amb `network_mode: host` al broker també) |
 
 > **Windows / macOS**: `network_mode: host` no és compatible amb Docker
-> Desktop. Usa la IP real del host en lloc de `127.0.0.1`.
+> Desktop. Al `docker-compose.yml`, comenta `network_mode: host` del viewer
+> i descomenta el bloc `ports` per exposar el port manualment. Usa la IP
+> real del host (p. ex. `192.168.1.10`) com a `CAMSEC_MQTT_BROKER` en lloc
+> de `127.0.0.1`.
 
 ---
 
