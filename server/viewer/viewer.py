@@ -67,6 +67,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("camsec.viewer")
+# Enforce the configured level on third-party loggers that may override it
+_lib_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
+for _lib in ("werkzeug", "waitress", "waitress.queue"):
+    logging.getLogger(_lib).setLevel(_lib_level)
 
 # ─── Alert store ──────────────────────────────────────────────────────────────
 
@@ -1274,15 +1278,23 @@ def live_stream():
 
 @app.route("/api/live/latest")
 def api_live_latest():
-    """Return the list of cameras that have a live frame, with their last timestamp."""
+    """Return the list of known live cameras, even if some are still waiting for a JPEG."""
     with _live_lock:
-        result = [
-            {"camera": cam, "ts": _live_ts[cam],
-             "ts_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_live_ts[cam])),
-             "url": f"/api/live/image/{cam}",
-             "status": _live_status.get(cam, "")}
-            for cam in _live_jpeg
-        ]
+        cameras = sorted(
+            cam for cam in (set(_live_jpeg) | set(_live_status) | set(_live_last_id))
+            if "/" in cam
+        )
+        result = []
+        for cam in cameras:
+            ts = _live_ts.get(cam, time.time())
+            result.append({
+                "camera": cam,
+                "ts": ts,
+                "ts_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+                "url": f"/api/live/image/{cam}",
+                "status": _live_status.get(cam, ""),
+                "has_frame": cam in _live_jpeg,
+            })
     return jsonify(result)
 
 
@@ -1520,5 +1532,8 @@ if __name__ == "__main__":
     t.start()
 
     log.info("HTTP server listening on %s:%d", HTTP_HOST, HTTP_PORT)
-    # Use threaded=True so SSE clients don't block each other
-    app.run(host=HTTP_HOST, port=HTTP_PORT, threaded=True)
+    # Use Waitress (production WSGI server) instead of Flask's dev server.
+    # SSE streams each hold one worker thread; 16 threads supports up to 16
+    # concurrent SSE clients while leaving headroom for normal HTTP requests.
+    from waitress import serve
+    serve(app, host=HTTP_HOST, port=HTTP_PORT, threads=16)
