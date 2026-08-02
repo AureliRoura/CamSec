@@ -4,12 +4,12 @@
 // Features:
 //   • Captures a JPEG image every 5.5 s and transmits it via MQTT in chunks
 //   • Detects low-light conditions via AGC gain; enables flash LED when dark
-//   • Subscribes to MQTT commands: "start" and "stop"
+//   • Subscribes to MQTT commands: "start", "stop", and "reset" reboot
 //   • Config mode: hold BOOT button (GPIO0) for 3 s at power-on →
 //     AP "CamSec-Config" + web portal at http://192.168.4.1
 //
 // MQTT topics  (prefix configurable, default "cam/01"):
-//   Subscribe : <prefix>/cmd          – "start" | "stop"
+//   Subscribe : <prefix>/cmd          – "start" | "stop" | "reset"
 //                                      | {"flash":"on"|"off"|"auto"}  (valor insensible a majúscules)
 //                                      | {"interval":<ms>}             (1000–3 600 000 ms)
 //                                      | {"force_image":true|false}   (force next full JPEG upload)
@@ -337,6 +337,13 @@ static void mqttCallback(char* topic, byte* payload, unsigned int len) {
             Serial.println("[MQTT] Capture STOPPED");
         }
         snprintf(ack, sizeof(ack), "{\"ok\":true,\"cmd\":\"stop\"}");
+    } else if (strcmp(msg, "reset") == 0) {
+        snprintf(ack, sizeof(ack), "{\"ok\":true,\"cmd\":\"reset\"}");
+        mqtt.publish(topicAck, ack, /*retain=*/false);
+        Serial.println("[MQTT] Camera REBOOT requested");
+        delay(500);
+        ESP.restart();
+        return;
     } else if (strstr(msg, "\"flash\"")) {
         // JSON flash command: {"flash":"on"} | {"flash":"off"} | {"flash":"auto"}
         // Value is case-insensitive.

@@ -287,6 +287,8 @@ Si la imatge és igual o quasi igual a l'última enviada:
 | `<prefix>/alert/image/*` | detector → broker | JPEG anotat amb bounding boxes |
 | `detector/status`      | detector → broker | `"online"` \| `"offline"` (retained) |
 
+La comanda MQTT `<prefix>/cmd` també admet `reset` per reiniciar la càmera.
+
 ### LED de la càmera
 
 | Estat | LED vermell (GPIO33) |
@@ -322,7 +324,9 @@ Accedeix a **http://\<ip-servidor\>:8088**
 | `DELETE /api/image/<id>` | Elimina una foto concreta |
 | `GET /stream` | Server-Sent Events en temps real |
 | `GET /embed` | Panel mínim per `<iframe>` |
-| `POST /api/cmd/<prefix>` | Envia una comanda MQTT a una càmera: `start`, `stop`, flash, interval |
+| `POST /api/cmd/<prefix>` | Envia una comanda MQTT a una càmera: `start`, `stop`, `reset`, flash, interval |
+
+La ruta `POST /api/cmd/<prefix>` també accepta `reset` per reiniciar una càmera.
 
 ---
 
@@ -519,6 +523,8 @@ Access at **http://\<server-ip\>:8088**
 | `GET /embed` | Minimal panel for `<iframe>` |
 | `POST /api/cmd/<prefix>` | Send an MQTT command to a camera: `start`, `stop`, flash, interval |
 
+`POST /api/cmd/<prefix>` also accepts `reset` to reboot a camera.
+
 ## Desktop viewer (optional)
 
 `tools/cam_viewer.py` is a standalone desktop app (tkinter) that shows live camera images without needing the Docker server or YOLOv8 detector.
@@ -543,6 +549,11 @@ python cam_viewer.py
 | `<prefix>/status`      | camera → broker | `"online"` \| `"capturing"` \| `"idle"` \| `"offline"` |
 | `<prefix>/alert`       | detector → broker | Detection summary JSON |
 | `<prefix>/alert/image/*` | detector → broker | Annotated JPEG with bounding boxes |
+
+
+El topic `<prefix>/cmd` també admet `reset` per reiniciar la càmera.
+
+The MQTT `<prefix>/cmd` topic also accepts `reset` to reboot the camera.
 
 ## Camera LED
 

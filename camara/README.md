@@ -153,12 +153,15 @@ Substitueix `cam/01` pel prefix configurat.
 | `cam/01/image/end` | Publicació | JSON | `{"id":1,"chunks":11,"ok":1}` |
 | `cam/01/image/same` | Publicació | JSON | `{"id":2,"same_as":1,"size":44910,"dark":0,"mode":"quasi","score":97}` |
 
+El topic `<prefix>/cmd` també admet `reset` per reiniciar la càmera.
+
 ### Comandes MQTT (`<prefix>/cmd`)
 
 | Comanda | Efecte |
 |---|---|
 | `start` | Inicia les captures periòdiques |
 | `stop` | Atura les captures; apaga el flaix |
+| `reset` | Reinicia la càmera |
 | `{"flash":"on"}` | Força el flaix **sempre encès** en cada captura |
 | `{"flash":"off"}` | Força el flaix **sempre apagat** (ignora la detecció de llum) |
 | `{"flash":"auto"}` | Restaura la detecció automàtica de poca llum (mode per defecte) |
@@ -167,6 +170,7 @@ Substitueix `cam/01` pel prefix configurat.
 
 El valor de `flash` és insensible a majúscules/minúscules (`"ON"`, `"Off"` i `"on"` són equivalents).
 
+> `reset` reinicia la placa i retorna un ACK abans del reboot.
 > Els canvis de `flash` persisteixen fins que s'envia `{"flash":"auto"}` o es reinicia la placa.
 > `{"interval":<ms>}` pren efecte immediatament però no es guarda a NVS; usa el portal web per fer-ho persistent.
 > `{"force_image":true}` és d'un sol ús: s'aplica a la propera captura i després es reinicia automàticament.
@@ -260,7 +264,7 @@ Firmware for an **AI-Thinker ESP32-CAM** board (OV2640) that periodically captur
 | Resolution | UXGA (1600×1200) with PSRAM · VGA (640×480) without |
 | Low-light detection | Probe frame > 200 KB → activates flash LED |
 | MQTT transmission | Image split into **4 096-byte** chunks |
-| MQTT commands | `start` · `stop` · `force_image` |
+| MQTT commands | `start` · `stop` · `reset` · `force_image` |
 | Camera orientation | 180° rotation configurable from the web portal |
 | Configuration mode | Web portal in access point mode (hold BOOT for 5 s at boot) |
 

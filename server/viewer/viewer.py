@@ -1314,7 +1314,7 @@ def api_cmd(prefix: str):
     """Publish an MQTT command to a camera.
 
     Body JSON:
-      {"cmd": "start"|"stop"}
+      {"cmd": "start"|"stop"|"reset"}
       {"flash": "on"|"off"|"auto"}
       {"interval": <ms>}   1000 ≤ ms ≤ 3600000
       {"force_image": true|false}
@@ -1324,8 +1324,8 @@ def api_cmd(prefix: str):
     data = request.get_json(force=True, silent=True) or {}
     if "cmd" in data:
         cmd = str(data["cmd"]).lower()
-        if cmd not in ("start", "stop"):
-            return jsonify({"ok": False, "error": "cmd must be 'start' or 'stop'"}), 400
+        if cmd not in ("start", "stop", "reset"):
+          return jsonify({"ok": False, "error": "cmd must be 'start', 'stop' or 'reset'"}), 400
         payload = cmd
     elif "flash" in data:
         val = str(data["flash"]).lower()

@@ -407,6 +407,8 @@ Access at **http://\<server-ip\>:8088**
 
 When `<prefix>/image/same` arrives, the detector skips a new inference (no JPEG payload) and the viewer refreshes live timestamp/status while reusing the latest cached frame.
 
+The `<prefix>/cmd` topic also accepts `reset` to reboot a camera.
+
 ### Published on detection
 
 | Topic | Format | Description |
